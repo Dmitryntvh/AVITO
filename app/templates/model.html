@@ -2,36 +2,76 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ model.name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body style="font-family:Arial; max-width:820px; margin:40px auto;">
-  <h1>{{ model.name }}</h1>
-  <p style="color:#555">{{ model.short }}</p>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="title">{{ model.name }}</div>
+        <div class="sub">{{ model.short }}</div>
+      </div>
+      <div class="badge">Каталог модели</div>
+    </div>
 
-  <h2>Цены</h2>
-  <p><b>Чертежи:</b> {{ model.prices.drawings }} ₽</p>
+    <div class="grid">
+      <div class="card">
+        <h2>Фото / видео</h2>
 
-  <h3>Заготовки</h3>
-  {% if model.prices.kits and model.prices.kits|length > 0 %}
-    <ul>
-      {% for kit in model.prices.kits %}
-        <li>{{ kit.material }} — <b>{{ kit.price }} ₽</b></li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p style="color:#777">Комплектации добавим позже.</p>
-  {% endif %}
+        {% if model.images and model.images|length > 0 %}
+          <div class="media">
+            {% for img in model.images %}
+              <img src="{{ img }}" alt="Фото модели">
+            {% endfor %}
+          </div>
+        {% else %}
+          <p>Пока нет загруженных фото. Добавим позже в каталог.</p>
+          <div class="alert">Совет: добавь 3–6 фото (реальные отгрузки/сборка/готовый чан) — конверсия сильно растёт.</div>
+        {% endif %}
 
-  <div style="margin-top:24px; padding:16px; border:1px solid #ddd; border-radius:12px;">
-    <h3 style="margin-top:0;">Доступ к чертежам</h3>
-    <p style="color:#555; margin-bottom:16px;">
-      Чертежи доступны после ввода телефона.
-    </p>
+        <div class="footer">
+          Дальше сюда добавим: видео-инструкции, частые ошибки при сборке и сравнение комплектаций.
+        </div>
+      </div>
 
-    <a href="/drawings/{{ model_code }}"
-       style="display:inline-block; padding:12px 16px; background:#2d7ef7; color:#fff; border-radius:10px; text-decoration:none;">
-      Получить чертежи
-    </a>
+      <div class="card">
+        <h2>Цены</h2>
+
+        <div class="pricebox">
+          <div class="price-line">
+            <div class="label">Чертежи</div>
+            <div class="val">{{ model.prices.drawings }} ₽</div>
+          </div>
+        </div>
+
+        <h3 style="margin-top:14px;">Заготовки (комплекты)</h3>
+
+        {% if model.prices.kits and model.prices.kits|length > 0 %}
+          <ul class="list">
+            {% for kit in model.prices.kits %}
+              <li>{{ kit.material }} — <b>{{ kit.price }} ₽</b></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="small">Комплектации добавим позже.</p>
+        {% endif %}
+
+        <div class="btnrow" style="margin-top:14px;">
+          <a class="btn primary" href="/drawings/{{ model_code }}">Получить чертежи</a>
+          <a class="btn ghost" href="/go/{{ model_code }}?src=from_model">Изменить телефон</a>
+        </div>
+
+        <div class="footer">
+          Чертежи доступны после ввода телефона. Если открыть страницу в инкогнито — система попросит телефон снова.
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Следующий шаг: добавим кнопку “Заказать заготовки” + форму ФИО/адрес/город → сделка в базе.
+    </div>
   </div>
 </body>
 </html>
