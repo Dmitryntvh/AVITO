@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Админка — модели</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="title">Админка • Каталог</div>
+        <div class="sub">Вошли как: {{ tg_username }}</div>
+      </div>
+      <div class="badge">Модели</div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="btnrow">
+        <a class="btn primary" href="/admin/models/new">+ Добавить модель</a>
+        <a class="btn ghost" href="/admin/logout">Выйти</a>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h2>Список моделей</h2>
+
+      {% if models and models|length > 0 %}
+        <div style="overflow:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="text-align:left; padding:10px; border-bottom:1px solid rgba(255,255,255,.12);">Код</th>
+                <th style="text-align:left; padding:10px; border-bottom:1px solid rgba(255,255,255,.12);">Название</th>
+                <th style="text-align:left; padding:10px; border-bottom:1px solid rgba(255,255,255,.12);">Чертежи</th>
+                <th style="text-align:left; padding:10px; border-bottom:1px solid rgba(255,255,255,.12);">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in models %}
+                <tr>
+                  <td style="padding:10px; border-bottom:1px solid rgba(255,255,255,.08);">{{ m.code }}</td>
+                  <td style="padding:10px; border-bottom:1px solid rgba(255,255,255,.08);">{{ m.name }}</td>
+                  <td style="padding:10px; border-bottom:1px solid rgba(255,255,255,.08);">{{ m.price_drawings }} ₽</td>
+                  <td style="padding:10px; border-bottom:1px solid rgba(255,255,255,.08);">
+                    <a class="btn ghost" href="/admin/models/{{ m.code }}">Редактировать</a>
+                    <a class="btn ghost" href="/go/{{ m.code }}?src=admin">Открыть</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p>Моделей пока нет. Нажми «Добавить модель».</p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>
