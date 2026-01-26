@@ -1,15 +1,79 @@
 import re
+import os
+import hmac
+import hashlib
+from urllib.parse import urlencode
+
+from starlette.middleware.sessions import SessionMiddleware
+from fastapi import HTTPException
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
+
 from .db import init_db, insert_lead
 from .models_data import MODELS
 
 app = FastAPI()
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax", https_only=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")  # без @, например: ZvezdaCRMbot
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login(request: Request):
+    if not TELEGRAM_BOT_USERNAME:
+        return HTMLResponse("<h1>Set TELEGRAM_BOT_USERNAME</h1>", status_code=500)
+
+    # auth_url должен быть абсолютным
+    # Railway прокидывает host, но безопаснее собрать вручную:
+    base = str(request.base_url).rstrip("/")
+    auth_url = f"{base}/admin/auth/telegram"
+
+    return templates.TemplateResponse(
+        "admin_login.html",
+        {"request": request, "bot_username": TELEGRAM_BOT_USERNAME, "auth_url": auth_url},
+    )
+
+
+@app.get("/admin/auth/telegram")
+def admin_auth_telegram(request: Request):
+    if not TELEGRAM_BOT_TOKEN:
+        return HTMLResponse("<h1>Set TELEGRAM_BOT_TOKEN</h1>", status_code=500)
+
+    # Telegram шлёт параметры GET: id, first_name, username, auth_date, hash, ...
+    data = dict(request.query_params)
+
+    if not _telegram_check_auth(data, TELEGRAM_BOT_TOKEN):
+        return HTMLResponse("<h1>Telegram auth failed (bad hash)</h1>", status_code=403)
+
+    # Доп. защита: не пускаем всех подряд — только админ id
+    user_id = int(data.get("id", "0"))
+    if user_id not in _admin_ids():
+        return HTMLResponse("<h1>Access denied</h1>", status_code=403)
+
+    request.session["is_admin"] = True
+    request.session["tg_user_id"] = user_id
+    request.session["tg_username"] = data.get("username", "")
+
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home(request: Request):
+    require_admin(request)
+    return templates.TemplateResponse("admin_home.html", {"request": request})
+
+
+@app.get("/admin/logout")
+def admin_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/admin/login", status_code=303)
+
 
 PHONE_RE = re.compile(r"\D+")
 
