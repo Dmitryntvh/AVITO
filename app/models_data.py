@@ -11,7 +11,7 @@ MODELS = {
         },
         "images": [],
         # ВАЖНО: вставь сюда ссылку на папку/файл в mail облаке
-        "drawings_url": "https://cloud.mail.ru/ВАША_ССЫЛКА",
+        "drawings_url": "https://cloud.mail.ru/public/BU46/cMydSMN2M",
     },
 
     # Заготовки/шаблон под будущие 5 моделей — пока можно оставить пустыми,
