@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Админка — модель</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="title">Админка • Модель</div>
+        <div class="sub">{% if is_new %}Создание{% else %}Редактирование{% endif %}</div>
+      </div>
+      <div class="badge">{{ m.code if m.code else "new" }}</div>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <h2>Данные модели</h2>
+
+        <form method="post" action="/admin/models/save" class="kv">
+          <div class="field">
+            <label>Code (в URL). Пример: polar-6</label>
+            <input class="input" name="code" value="{{ m.code }}" {% if not is_new %}readonly{% endif %} required>
+          </div>
+
+          <div class="field">
+            <label>Название</label>
+            <input class="input" name="name" value="{{ m.name }}" required>
+          </div>
+
+          <div class="field">
+            <label>Короткое описание</label>
+            <input class="input" name="short" value="{{ m.short }}">
+          </div>
+
+          <div class="field">
+            <label>Цена чертежей (руб)</label>
+            <input class="input" name="price_drawings" value="{{ m.price_drawings }}" inputmode="numeric">
+          </div>
+
+          <div class="field">
+            <label>Ссылка на чертежи (Mail-облако)</label>
+            <input class="input" name="drawings_url" value="{{ m.drawings_url }}" placeholder="https://cloud.mail.ru/...">
+          </div>
+
+          <div class="field">
+            <label>Комплекты заготовок (каждая строка: Материал | Цена)</label>
+            <textarea class="input" name="kits_text" rows="7" style="resize:vertical;">{{ m.kits_text }}</textarea>
+            <div class="small">Пример: Ст3 | 35000</div>
+          </div>
+
+          <div class="btnrow">
+            <button class="btn primary" type="submit">Сохранить</button>
+            <a class="btn ghost" href="/admin/models">Назад</a>
+            <a class="btn ghost" href="/go/{{ m.code if m.code else '' }}?src=admin" {% if is_new %}style="pointer-events:none;opacity:.5"{% endif %}>Открыть</a>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Удаление</h2>
+        {% if is_new %}
+          <p>Сначала создай модель — потом можно будет удалить.</p>
+        {% else %}
+          <div class="alert">Удаление необратимо. Комплекты также удалятся.</div>
+          <form method="post" action="/admin/models/delete" style="margin-top:12px;">
+            <input type="hidden" name="code" value="{{ m.code }}">
+            <button class="btn" type="submit" style="background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.35);">Удалить модель</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>
