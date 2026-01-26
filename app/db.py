@@ -151,6 +151,27 @@ def replace_images(model_code, urls):
                     (uuid.uuid4(), model_code, url, order_num),
                 )
         conn.commit()
+def list_leads(limit=20, offset=0):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, phone, source, model_code, created_at
+                FROM leads
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            return cur.fetchall()
+
+
+def count_leads():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM leads")
+            row = cur.fetchone()
+            return int(row["cnt"])
 
 
 def delete_model(code):
