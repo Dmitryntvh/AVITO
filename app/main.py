@@ -9,14 +9,19 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from .db import init_db, insert_lead
-from .models_data import MODELS
-
+from .db import (
+    init_db,
+    insert_lead,
+    list_models,
+    get_model,
+    upsert_model,
+    replace_kits,
+    delete_model,
+)
 
 # ======================
 # CONFIG
 # ======================
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
@@ -34,20 +39,11 @@ def get_admin_ids() -> set[int]:
 
 ADMIN_IDS = get_admin_ids()
 
-
 # ======================
 # APP INIT
 # ======================
-
 app = FastAPI()
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SESSION_SECRET,
-    same_site="lax",
-    https_only=True,
-)
-
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax", https_only=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -55,7 +51,6 @@ templates = Jinja2Templates(directory="app/templates")
 # ======================
 # HELPERS
 # ======================
-
 PHONE_RE = re.compile(r"\D+")
 
 
@@ -80,29 +75,52 @@ def telegram_check_auth(data: dict, bot_token: str) -> bool:
         return False
 
     check_hash = data["hash"]
-
-    pairs = []
-    for k, v in data.items():
-        if k != "hash":
-            pairs.append(f"{k}={v}")
-
+    pairs = [f"{k}={v}" for k, v in data.items() if k != "hash"]
     pairs.sort()
     data_check_string = "\n".join(pairs)
 
     secret_key = hashlib.sha256(bot_token.encode()).digest()
-    hmac_hash = hmac.new(
-        secret_key,
-        data_check_string.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
+    hmac_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     return hmac_hash == check_hash
+
+
+def parse_kits_text(kits_text: str) -> list[dict]:
+    """
+    Формат ввода в админке (каждая строка):
+    Материал | Цена
+
+    Пример:
+    Ст3 | 35000
+    AISI 430 + печь Ст3 4 мм | 65000
+    """
+    kits = []
+    for line in (kits_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" not in line:
+            # если без цены — пропускаем
+            continue
+        material, price = line.split("|", 1)
+        material = material.strip()
+        price = price.strip().replace(" ", "")
+        if not material:
+            continue
+        try:
+            price_int = int(price)
+        except ValueError:
+            continue
+        kits.append({"material": material, "price": price_int})
+    return kits
+
+
+def kits_to_text(kits: list[dict]) -> str:
+    return "\n".join([f"{k['material']} | {k['price']}" for k in kits])
 
 
 # ======================
 # STARTUP
 # ======================
-
 @app.on_event("startup")
 def startup():
     init_db()
@@ -111,21 +129,20 @@ def startup():
 # ======================
 # PUBLIC SITE
 # ======================
-
 @app.get("/", response_class=HTMLResponse)
 def root():
-    return RedirectResponse("/go/polar-6?src=root", status_code=303)
+    # Если есть хотя бы одна модель в БД — ведём на неё, иначе в админку создавать.
+    models = list_models()
+    if models:
+        return RedirectResponse(f"/go/{models[0]['code']}?src=root", status_code=303)
+    return RedirectResponse("/admin/models", status_code=303)
 
 
 @app.get("/go/{model_code}", response_class=HTMLResponse)
 def phone_gate(request: Request, model_code: str, src: str = "unknown"):
     return templates.TemplateResponse(
         "phone_gate.html",
-        {
-            "request": request,
-            "model_code": model_code,
-            "src": src,
-        },
+        {"request": request, "model_code": model_code, "src": src},
     )
 
 
@@ -143,36 +160,33 @@ def submit_phone(
     if not phone_norm:
         return RedirectResponse(f"/go/{model_code}?src={src}", status_code=303)
 
-    lead_id = insert_lead(
-        phone=phone_norm,
-        source=src,
-        model_code=model_code or None,
-    )
+    lead_id = insert_lead(phone=phone_norm, source=src, model_code=model_code or None)
 
     resp = RedirectResponse(f"/models/{model_code}", status_code=303)
-    resp.set_cookie(
-        key="lead_id",
-        value=lead_id,
-        max_age=60 * 60 * 24 * 30,
-        httponly=True,
-        samesite="lax",
-    )
+    resp.set_cookie("lead_id", lead_id, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax")
     return resp
 
 
 @app.get("/models/{model_code}", response_class=HTMLResponse)
 def model_page(request: Request, model_code: str):
-    model = MODELS.get(model_code)
+    model = get_model(model_code)
     if not model:
         return HTMLResponse("<h1>Модель не найдена</h1>", status_code=404)
 
+    # приводим к формату, ожидаемому шаблоном
+    view_model = {
+        "name": model["name"],
+        "short": model["short"],
+        "prices": {
+            "drawings": model["price_drawings"],
+            "kits": model["kits"],
+        },
+        "images": [],  # фото сделаем следующим шагом
+    }
+
     return templates.TemplateResponse(
         "model.html",
-        {
-            "request": request,
-            "model": model,
-            "model_code": model_code,
-        },
+        {"request": request, "model": view_model, "model_code": model_code},
     )
 
 
@@ -182,21 +196,23 @@ def drawings_page(request: Request, model_code: str):
     if not lead_id:
         return RedirectResponse(f"/go/{model_code}?src=drawings", status_code=303)
 
-    model = MODELS.get(model_code)
+    model = get_model(model_code)
     if not model:
         return HTMLResponse("<h1>Модель не найдена</h1>", status_code=404)
 
-    drawings_url = model.get("drawings_url")
-    if not drawings_url:
+    if not model["drawings_url"]:
         return HTMLResponse("<h1>Ссылка на чертежи не задана</h1>", status_code=404)
+
+    # для шаблона drawings
+    view_model = {"name": model["name"]}
 
     return templates.TemplateResponse(
         "drawings.html",
         {
             "request": request,
-            "model": model,
+            "model": view_model,
             "model_code": model_code,
-            "drawings_url": drawings_url,
+            "drawings_url": model["drawings_url"],
         },
     )
 
@@ -204,59 +220,127 @@ def drawings_page(request: Request, model_code: str):
 # ======================
 # ADMIN — TELEGRAM LOGIN
 # ======================
-
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login(request: Request):
     if not TELEGRAM_BOT_USERNAME:
-        return HTMLResponse("TELEGRAM_BOT_USERNAME not set", status_code=500)
+        return HTMLResponse("<h1>TELEGRAM_BOT_USERNAME not set</h1>", status_code=500)
 
     base = str(request.base_url).rstrip("/")
     auth_url = f"{base}/admin/auth/telegram"
 
     return templates.TemplateResponse(
         "admin_login.html",
-        {
-            "request": request,
-            "bot_username": TELEGRAM_BOT_USERNAME,
-            "auth_url": auth_url,
-        },
+        {"request": request, "bot_username": TELEGRAM_BOT_USERNAME, "auth_url": auth_url},
     )
 
 
 @app.get("/admin/auth/telegram")
 def admin_auth_telegram(request: Request):
     if not TELEGRAM_BOT_TOKEN:
-        return HTMLResponse("TELEGRAM_BOT_TOKEN not set", status_code=500)
+        return HTMLResponse("<h1>TELEGRAM_BOT_TOKEN not set</h1>", status_code=500)
 
     data = dict(request.query_params)
 
     if not telegram_check_auth(data, TELEGRAM_BOT_TOKEN):
-        return HTMLResponse("Telegram auth failed", status_code=403)
+        return HTMLResponse("<h1>Telegram auth failed</h1>", status_code=403)
 
     user_id = int(data.get("id", "0"))
     if user_id not in ADMIN_IDS:
-        return HTMLResponse("Access denied", status_code=403)
+        return HTMLResponse("<h1>Access denied</h1>", status_code=403)
 
     request.session["is_admin"] = True
     request.session["tg_user_id"] = user_id
     request.session["tg_username"] = data.get("username", "")
 
-    return RedirectResponse("/admin", status_code=303)
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_home(request: Request):
-    require_admin(request)
-    return templates.TemplateResponse(
-        "admin_home.html",
-        {
-            "request": request,
-            "tg_username": request.session.get("tg_username"),
-        },
-    )
+    return RedirectResponse("/admin/models", status_code=303)
 
 
 @app.get("/admin/logout")
 def admin_logout(request: Request):
     request.session.clear()
     return RedirectResponse("/admin/login", status_code=303)
+
+
+# ======================
+# ADMIN — CATALOG PANEL
+# ======================
+@app.get("/admin/models", response_class=HTMLResponse)
+def admin_models(request: Request):
+    require_admin(request)
+    models = list_models()
+    return templates.TemplateResponse(
+        "admin_models.html",
+        {"request": request, "models": models, "tg_username": request.session.get("tg_username")},
+    )
+
+
+@app.get("/admin/models/new", response_class=HTMLResponse)
+def admin_model_new(request: Request):
+    require_admin(request)
+    empty = {
+        "code": "",
+        "name": "",
+        "short": "",
+        "price_drawings": 0,
+        "drawings_url": "",
+        "kits_text": "",
+    }
+    return templates.TemplateResponse("admin_model_form.html", {"request": request, "m": empty, "is_new": True})
+
+
+@app.get("/admin/models/{code}", response_class=HTMLResponse)
+def admin_model_edit(request: Request, code: str):
+    require_admin(request)
+    model = get_model(code)
+    if not model:
+        return HTMLResponse("<h1>Модель не найдена</h1>", status_code=404)
+
+    m = {
+        "code": model["code"],
+        "name": model["name"],
+        "short": model["short"],
+        "price_drawings": model["price_drawings"],
+        "drawings_url": model["drawings_url"],
+        "kits_text": kits_to_text(model["kits"]),
+    }
+    return templates.TemplateResponse("admin_model_form.html", {"request": request, "m": m, "is_new": False})
+
+
+@app.post("/admin/models/save")
+def admin_model_save(
+    request: Request,
+    code: str = Form(...),
+    name: str = Form(...),
+    short: str = Form(""),
+    price_drawings: str = Form("0"),
+    drawings_url: str = Form(""),
+    kits_text: str = Form(""),
+):
+    require_admin(request)
+
+    code = (code or "").strip()
+    name = (name or "").strip()
+    short = (short or "").strip()
+    drawings_url = (drawings_url or "").strip()
+
+    if not code or not name:
+        return HTMLResponse("<h1>Нужно заполнить code и name</h1>", status_code=400)
+
+    try:
+        pd = int((price_drawings or "0").replace(" ", ""))
+    except ValueError:
+        pd = 0
+
+    upsert_model(code=code, name=name, short=short, price_drawings=pd, drawings_url=drawings_url)
+
+    kits = parse_kits_text(kits_text)
+    replace_kits(model_code=code, kits=kits)
+
+    return RedirectResponse(f"/admin/models/{code}", status_code=303)
+
+
+@app.post("/admin/models/delete")
+def admin_model_delete(request: Request, code: str = Form(...)):
+    require_admin(request)
+    delete_model(code)
+    return RedirectResponse("/admin/models", status_code=303)
