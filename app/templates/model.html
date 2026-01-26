@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>{{ model.name }}</title>
+</head>
+<body style="font-family:Arial; max-width:820px; margin:40px auto;">
+  <h1>{{ model.name }}</h1>
+  <p style="color:#555">{{ model.short }}</p>
+
+  <h2>Цены</h2>
+  <p><b>Чертежи:</b> {{ model.prices.drawings }} ₽</p>
+
+  <h3>Заготовки</h3>
+  <ul>
+    {% for kit in model.prices.kits %}
+      <li>{{ kit.material }} — <b>{{ kit.price }} ₽</b></li>
+    {% endfor %}
+  </ul>
+
+  <p style="margin-top:24px; color:#777">
+    (Дальше добавим: “Скачать чертежи”, “Заказать заготовки”, “Видео”, “Инструкции”.)
+  </p>
+</body>
+</html>
