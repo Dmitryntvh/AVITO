@@ -9,7 +9,7 @@ MODELS = {
                 {"material": "AISI 430 + печь Ст3 4 мм", "price": 65000},
             ],
         },
-        "images": [],
+        "images": "https://assets.smolkirpich.ru/thumbnails/c4/c47f6062f5853540aedbb4af7e06533b.jpg",
         # ВАЖНО: вставь сюда ссылку на папку/файл в mail облаке
         "drawings_url": "https://cloud.mail.ru/public/BU46/cMydSMN2M",
     },
