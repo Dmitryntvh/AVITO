@@ -16,19 +16,17 @@ from .db import (
     get_model,
     upsert_model,
     replace_kits,
+    replace_images,
     delete_model,
 )
 
-# ======================
-# CONFIG
-# ======================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
 ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "")
 
 
-def get_admin_ids() -> set[int]:
+def get_admin_ids():
     ids = set()
     for part in ADMIN_TG_IDS_RAW.split(","):
         part = part.strip()
@@ -39,22 +37,15 @@ def get_admin_ids() -> set[int]:
 
 ADMIN_IDS = get_admin_ids()
 
-# ======================
-# APP INIT
-# ======================
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax", https_only=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
-
-# ======================
-# HELPERS
-# ======================
 PHONE_RE = re.compile(r"\D+")
 
 
-def normalize_phone(raw: str) -> str:
+def normalize_phone(raw):
     s = PHONE_RE.sub("", raw or "")
     if len(s) == 11 and s.startswith("8"):
         s = "7" + s[1:]
@@ -73,33 +64,20 @@ def require_admin(request: Request):
 def telegram_check_auth(data: dict, bot_token: str) -> bool:
     if "hash" not in data:
         return False
-
     check_hash = data["hash"]
     pairs = [f"{k}={v}" for k, v in data.items() if k != "hash"]
     pairs.sort()
     data_check_string = "\n".join(pairs)
-
     secret_key = hashlib.sha256(bot_token.encode()).digest()
     hmac_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     return hmac_hash == check_hash
 
 
-def parse_kits_text(kits_text: str) -> list[dict]:
-    """
-    Формат ввода в админке (каждая строка):
-    Материал | Цена
-
-    Пример:
-    Ст3 | 35000
-    AISI 430 + печь Ст3 4 мм | 65000
-    """
+def parse_kits_text(kits_text):
     kits = []
     for line in (kits_text or "").splitlines():
         line = line.strip()
-        if not line:
-            continue
-        if "|" not in line:
-            # если без цены — пропускаем
+        if not line or "|" not in line:
             continue
         material, price = line.split("|", 1)
         material = material.strip()
@@ -114,24 +92,44 @@ def parse_kits_text(kits_text: str) -> list[dict]:
     return kits
 
 
-def kits_to_text(kits: list[dict]) -> str:
-    return "\n".join([f"{k['material']} | {k['price']}" for k in kits])
+def kits_to_text(kits):
+    return "\n".join([f"{k['material']} | {k['price']}" for k in kits or []])
 
 
-# ======================
-# STARTUP
-# ======================
+def parse_images_text(images_text):
+    urls = []
+    for line in (images_text or "").splitlines():
+        url = line.strip()
+        if not url:
+            continue
+        # минимальная фильтрация
+        if url.startswith("http://") or url.startswith("https://"):
+            urls.append(url)
+    # убираем дубликаты, сохраняя порядок
+    seen = set()
+    unique = []
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        unique.append(u)
+    return unique
+
+
+def images_to_text(urls):
+    return "\n".join(urls or [])
+
+
 @app.on_event("startup")
 def startup():
     init_db()
 
 
-# ======================
-# PUBLIC SITE
-# ======================
+# ----------------------
+# PUBLIC
+# ----------------------
 @app.get("/", response_class=HTMLResponse)
 def root():
-    # Если есть хотя бы одна модель в БД — ведём на неё, иначе в админку создавать.
     models = list_models()
     if models:
         return RedirectResponse(f"/go/{models[0]['code']}?src=root", status_code=303)
@@ -140,10 +138,7 @@ def root():
 
 @app.get("/go/{model_code}", response_class=HTMLResponse)
 def phone_gate(request: Request, model_code: str, src: str = "unknown"):
-    return templates.TemplateResponse(
-        "phone_gate.html",
-        {"request": request, "model_code": model_code, "src": src},
-    )
+    return templates.TemplateResponse("phone_gate.html", {"request": request, "model_code": model_code, "src": src})
 
 
 @app.post("/go/submit")
@@ -173,21 +168,14 @@ def model_page(request: Request, model_code: str):
     if not model:
         return HTMLResponse("<h1>Модель не найдена</h1>", status_code=404)
 
-    # приводим к формату, ожидаемому шаблоном
     view_model = {
         "name": model["name"],
         "short": model["short"],
-        "prices": {
-            "drawings": model["price_drawings"],
-            "kits": model["kits"],
-        },
-        "images": [],  # фото сделаем следующим шагом
+        "prices": {"drawings": model["price_drawings"], "kits": model["kits"]},
+        "images": model.get("images", []),
     }
 
-    return templates.TemplateResponse(
-        "model.html",
-        {"request": request, "model": view_model, "model_code": model_code},
-    )
+    return templates.TemplateResponse("model.html", {"request": request, "model": view_model, "model_code": model_code})
 
 
 @app.get("/drawings/{model_code}", response_class=HTMLResponse)
@@ -203,23 +191,15 @@ def drawings_page(request: Request, model_code: str):
     if not model["drawings_url"]:
         return HTMLResponse("<h1>Ссылка на чертежи не задана</h1>", status_code=404)
 
-    # для шаблона drawings
-    view_model = {"name": model["name"]}
-
     return templates.TemplateResponse(
         "drawings.html",
-        {
-            "request": request,
-            "model": view_model,
-            "model_code": model_code,
-            "drawings_url": model["drawings_url"],
-        },
+        {"request": request, "model": {"name": model["name"]}, "model_code": model_code, "drawings_url": model["drawings_url"]},
     )
 
 
-# ======================
-# ADMIN — TELEGRAM LOGIN
-# ======================
+# ----------------------
+# ADMIN: TELEGRAM
+# ----------------------
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login(request: Request):
     if not TELEGRAM_BOT_USERNAME:
@@ -228,10 +208,7 @@ def admin_login(request: Request):
     base = str(request.base_url).rstrip("/")
     auth_url = f"{base}/admin/auth/telegram"
 
-    return templates.TemplateResponse(
-        "admin_login.html",
-        {"request": request, "bot_username": TELEGRAM_BOT_USERNAME, "auth_url": auth_url},
-    )
+    return templates.TemplateResponse("admin_login.html", {"request": request, "bot_username": TELEGRAM_BOT_USERNAME, "auth_url": auth_url})
 
 
 @app.get("/admin/auth/telegram")
@@ -261,30 +238,20 @@ def admin_logout(request: Request):
     return RedirectResponse("/admin/login", status_code=303)
 
 
-# ======================
-# ADMIN — CATALOG PANEL
-# ======================
+# ----------------------
+# ADMIN: CATALOG
+# ----------------------
 @app.get("/admin/models", response_class=HTMLResponse)
 def admin_models(request: Request):
     require_admin(request)
     models = list_models()
-    return templates.TemplateResponse(
-        "admin_models.html",
-        {"request": request, "models": models, "tg_username": request.session.get("tg_username")},
-    )
+    return templates.TemplateResponse("admin_models.html", {"request": request, "models": models, "tg_username": request.session.get("tg_username")})
 
 
 @app.get("/admin/models/new", response_class=HTMLResponse)
 def admin_model_new(request: Request):
     require_admin(request)
-    empty = {
-        "code": "",
-        "name": "",
-        "short": "",
-        "price_drawings": 0,
-        "drawings_url": "",
-        "kits_text": "",
-    }
+    empty = {"code": "", "name": "", "short": "", "price_drawings": 0, "drawings_url": "", "kits_text": "", "images_text": ""}
     return templates.TemplateResponse("admin_model_form.html", {"request": request, "m": empty, "is_new": True})
 
 
@@ -301,7 +268,8 @@ def admin_model_edit(request: Request, code: str):
         "short": model["short"],
         "price_drawings": model["price_drawings"],
         "drawings_url": model["drawings_url"],
-        "kits_text": kits_to_text(model["kits"]),
+        "kits_text": kits_to_text(model.get("kits", [])),
+        "images_text": images_to_text(model.get("images", [])),
     }
     return templates.TemplateResponse("admin_model_form.html", {"request": request, "m": m, "is_new": False})
 
@@ -315,6 +283,7 @@ def admin_model_save(
     price_drawings: str = Form("0"),
     drawings_url: str = Form(""),
     kits_text: str = Form(""),
+    images_text: str = Form(""),
 ):
     require_admin(request)
 
@@ -335,6 +304,9 @@ def admin_model_save(
 
     kits = parse_kits_text(kits_text)
     replace_kits(model_code=code, kits=kits)
+
+    urls = parse_images_text(images_text)
+    replace_images(model_code=code, urls=urls)
 
     return RedirectResponse(f"/admin/models/{code}", status_code=303)
 
