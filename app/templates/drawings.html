@@ -2,25 +2,56 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Чертежи — {{ model.name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body style="font-family:Arial; max-width:820px; margin:40px auto;">
-  <a href="/models/{{ model_code }}" style="text-decoration:none; color:#555;">← Назад к модели</a>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="title">Чертежи</div>
+        <div class="sub">{{ model.name }}</div>
+      </div>
+      <div class="badge">Доступ открыт</div>
+    </div>
 
-  <h1>Чертежи: {{ model.name }}</h1>
-  <p style="color:#555">Скачивание доступно после ввода телефона.</p>
+    <div class="hero">
+      <h1>Скачать чертежи</h1>
+      <p>Скачивание доступно после ввода телефона. Ниже — кнопка на облако и полезные материалы (добавим дальше).</p>
+    </div>
 
-  <div style="border:1px solid #ddd; padding:16px; border-radius:12px;">
-    <p><b>Ссылка на скачивание:</b></p>
+    <div class="grid">
+      <div class="card">
+        <h2>Скачивание</h2>
 
-    <a href="{{ drawings_url }}" target="_blank"
-       style="display:inline-block; padding:12px 16px; background:#2d7ef7; color:#fff; border-radius:10px; text-decoration:none;">
-      Скачать чертежи
-    </a>
+        <div class="btnrow">
+          <a class="btn success" href="{{ drawings_url }}" target="_blank" rel="noopener">
+            Скачать чертежи (Mail-облако)
+          </a>
+          <a class="btn ghost" href="/models/{{ model_code }}">Назад к модели</a>
+        </div>
+
+        <div class="footer">
+          Важно: если ссылку на облако переслать — другой человек сможет скачать.
+          На следующем этапе сделаем более защищённую выдачу (временные ссылки/токены).
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Что добавим здесь дальше</h2>
+        <ul class="list">
+          <li>Видео-инструкция сборки</li>
+          <li>Ошибки при сварке (чтобы не повело металл)</li>
+          <li>Кнопка “Заказать заготовки” с формой</li>
+          <li>Сроки изготовления и доставка</li>
+        </ul>
+
+        <div class="footer">
+          Это страница “после получения чертежей” — она лучше всего конвертирует в продажу заготовок.
+        </div>
+      </div>
+    </div>
   </div>
-
-  <p style="margin-top:16px; color:#777;">
-    Далее добавим: инструкции сборки, видео и блок “Заказать заготовки”.
-  </p>
 </body>
 </html>
