@@ -37,6 +37,17 @@ def init_db():
       material TEXT NOT NULL,
       price INTEGER NOT NULL DEFAULT 0
     );
+
+    -- фото (URL) для модели
+    CREATE TABLE IF NOT EXISTS catalog_images (
+      id UUID PRIMARY KEY,
+      model_code TEXT NOT NULL REFERENCES catalog_models(code) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_catalog_kits_model ON catalog_kits(model_code);
+    CREATE INDEX IF NOT EXISTS idx_catalog_images_model ON catalog_images(model_code);
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -83,6 +94,13 @@ def get_model(code):
                 (code,),
             )
             model["kits"] = cur.fetchall()
+
+            cur.execute(
+                "SELECT url FROM catalog_images WHERE model_code = %s ORDER BY sort_order ASC, url ASC",
+                (code,),
+            )
+            model["images"] = [r["url"] for r in cur.fetchall()]
+
             return model
 
 
@@ -114,6 +132,23 @@ def replace_kits(model_code, kits):
                 cur.execute(
                     "INSERT INTO catalog_kits (id, model_code, material, price) VALUES (%s, %s, %s, %s)",
                     (uuid.uuid4(), model_code, kit["material"], kit["price"]),
+                )
+        conn.commit()
+
+
+def replace_images(model_code, urls):
+    """
+    urls: список строк URL. Полностью перезаписывает фото модели.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM catalog_images WHERE model_code = %s", (model_code,))
+            order_num = 0
+            for url in urls:
+                order_num += 1
+                cur.execute(
+                    "INSERT INTO catalog_images (id, model_code, url, sort_order) VALUES (%s, %s, %s, %s)",
+                    (uuid.uuid4(), model_code, url, order_num),
                 )
         conn.commit()
 
