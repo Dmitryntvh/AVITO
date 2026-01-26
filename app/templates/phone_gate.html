@@ -2,29 +2,76 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Доступ к каталогу</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body style="font-family:Arial; max-width:520px; margin:40px auto;">
-  <h1>Каталог и цены</h1>
-  <p>Введите номер телефона — откроются цены и материалы.</p>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="title">Каталог • ЗВЕЗДА</div>
+        <div class="sub">Цены, комплектации, чертежи, инструкции</div>
+      </div>
+      <div class="badge">Доступ по телефону</div>
+    </div>
 
-  <form method="post" action="/go/submit" style="border:1px solid #ddd; padding:16px; border-radius:12px;">
-    <input type="hidden" name="model_code" value="{{ model_code }}">
-    <input type="hidden" name="src" value="{{ src }}">
+    <div class="hero">
+      <h1>Открой каталог и цены</h1>
+      <p>Введите номер телефона — мы зафиксируем обращение и сразу покажем страницу модели.</p>
+    </div>
 
-    <label>Телефон</label><br>
-    <input name="phone" placeholder="+7 999 123-45-67" required
-           style="width:100%; padding:12px; margin:8px 0 16px;">
+    <div class="grid">
+      <div class="card">
+        <h2>Введите телефон</h2>
 
-    <label style="display:flex; gap:10px; align-items:center;">
-      <input type="checkbox" name="agree" value="yes" required>
-      Согласен на обработку персональных данных
-    </label>
+        <form method="post" action="/go/submit" class="kv">
+          <input type="hidden" name="model_code" value="{{ model_code }}">
+          <input type="hidden" name="src" value="{{ src }}">
 
-    <button type="submit"
-      style="margin-top:16px; padding:12px 16px; width:100%;">
-      Открыть
-    </button>
-  </form>
+          <div class="field">
+            <label>Телефон (формат РФ)</label>
+            <input class="input" name="phone" placeholder="+7 999 123-45-67" inputmode="tel" required>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" name="agree" value="yes" required>
+            Согласен на обработку персональных данных
+          </label>
+
+          <div class="btnrow">
+            <button class="btn primary" type="submit">Открыть каталог</button>
+            <a class="btn ghost" href="/models/{{ model_code }}">Смотреть без формы</a>
+          </div>
+
+          <div class="small">
+            Мы сохраняем только телефон и источник перехода, чтобы не потерять контакт после звонка/переписки.
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Что будет дальше</h2>
+        <div class="pricebox">
+          <div class="price-line">
+            <div class="label">Шаг 1</div>
+            <div class="val">Телефон</div>
+          </div>
+          <div class="price-line">
+            <div class="label">Шаг 2</div>
+            <div class="val">Каталог модели</div>
+          </div>
+          <div class="price-line">
+            <div class="label">Шаг 3</div>
+            <div class="val">Чертежи / Заготовки</div>
+          </div>
+        </div>
+
+        <div class="footer">
+          Если открываешь из Авито/Озон — эта страница помогает зафиксировать контакт и вернуть клиента даже если он пропал.
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
