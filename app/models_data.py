@@ -10,6 +10,41 @@ MODELS = {
             ],
         },
         "images": [],
-        "drawings_url": "https://cloud.mail.ru/public/KhWS/RKwYaZbms"
-    }
+        # ВАЖНО: вставь сюда ссылку на папку/файл в mail облаке
+        "drawings_url": "https://cloud.mail.ru/ВАША_ССЫЛКА",
+    },
+
+    # Заготовки/шаблон под будущие 5 моделей — пока можно оставить пустыми,
+    # позже добавим реальные цены и ссылки.
+    "polar-8": {
+        "name": "Банный чан Полярный 8",
+        "short": "Каталог модели. Цены и комплектации.",
+        "prices": {"drawings": 0, "kits": []},
+        "images": [],
+        "drawings_url": "",
+    },
+
+    "model-3": {
+        "name": "Модель 3",
+        "short": "",
+        "prices": {"drawings": 0, "kits": []},
+        "images": [],
+        "drawings_url": "",
+    },
+
+    "model-4": {
+        "name": "Модель 4",
+        "short": "",
+        "prices": {"drawings": 0, "kits": []},
+        "images": [],
+        "drawings_url": "",
+    },
+
+    "model-5": {
+        "name": "Модель 5",
+        "short": "",
+        "prices": {"drawings": 0, "kits": []},
+        "images": [],
+        "drawings_url": "",
+    },
 }
