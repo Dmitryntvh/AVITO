@@ -16,10 +16,11 @@ from telegram.ext import (
     filters,
 )
 
-# === ИМПОРТ БД ===
 from app.db import list_leads, count_leads
 
-# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
+# =====================
+# ENV
+# =====================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "")
 
@@ -27,12 +28,12 @@ if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
 
-def get_admin_ids() -> set[int]:
+def get_admin_ids():
     ids = set()
-    for part in (ADMIN_TG_IDS_RAW or "").split(","):
-        part = part.strip()
-        if part.isdigit():
-            ids.add(int(part))
+    for x in (ADMIN_TG_IDS_RAW or "").split(","):
+        x = x.strip()
+        if x.isdigit():
+            ids.add(int(x))
     return ids
 
 
@@ -44,17 +45,17 @@ def is_admin(update: Update) -> bool:
     return bool(user and user.id in ADMIN_IDS)
 
 
-# === КЛАВИАТУРЫ ===
-def main_keyboard() -> ReplyKeyboardMarkup:
+# =====================
+# UI
+# =====================
+def main_keyboard():
     return ReplyKeyboardMarkup(
-        [
-            ["📥 Лиды"],
-        ],
+        [["📥 Лиды"]],
         resize_keyboard=True,
     )
 
 
-def leads_keyboard(offset: int, limit: int, total: int) -> InlineKeyboardMarkup:
+def leads_keyboard(offset: int, limit: int, total: int):
     buttons = []
 
     if offset > 0:
@@ -70,40 +71,41 @@ def leads_keyboard(offset: int, limit: int, total: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([buttons]) if buttons else None
 
 
-# === ФОРМАТ ВЫВОДА ===
-def format_leads(leads, offset, limit, total) -> str:
-    if not leads:
+def format_leads(rows, offset, limit, total):
+    if not rows:
         return "Лидов пока нет."
 
-    lines = [f"📥 Лиды {offset + 1}–{min(offset + limit, total)} из {total}\n"]
+    out = [f"📥 Лиды {offset + 1}–{min(offset + limit, total)} из {total}\n"]
 
-    for lead in leads:
-        created = lead["created_at"]
-        if isinstance(created, datetime):
-            created = created.strftime("%d.%m.%Y %H:%M")
+    for r in rows:
+        dt = r["created_at"]
+        if isinstance(dt, datetime):
+            dt = dt.strftime("%d.%m.%Y %H:%M")
 
-        lines.append(
+        out.append(
             "\n".join(
                 [
-                    f"📞 {lead['phone']}",
-                    f"Источник: {lead['source']}",
-                    f"Модель: {lead['model_code'] or '-'}",
-                    f"Дата: {created}",
+                    f"📞 {r['phone']}",
+                    f"Источник: {r['source']}",
+                    f"Модель: {r['model_code'] or '-'}",
+                    f"Дата: {dt}",
                 ]
             )
         )
 
-    return "\n\n".join(lines)
+    return "\n\n".join(out)
 
 
-# === ОБРАБОТЧИКИ ===
+# =====================
+# HANDLERS
+# =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        await update.message.reply_text("⛔ Доступ запрещён.")
+        await update.message.reply_text("⛔ Доступ запрещён")
         return
 
     await update.message.reply_text(
-        "CRM — управление лидами",
+        "CRM • Управление лидами",
         reply_markup=main_keyboard(),
     )
 
@@ -113,18 +115,18 @@ async def show_leads(update: Update, context: ContextTypes.DEFAULT_TYPE, offset=
     leads = list_leads(limit=limit, offset=offset)
 
     text = format_leads(leads, offset, limit, total)
-    keyboard = leads_keyboard(offset, limit, total)
+    kb = leads_keyboard(offset, limit, total)
 
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+        await update.callback_query.edit_message_text(text, reply_markup=kb)
     else:
-        await update.message.reply_text(text, reply_markup=keyboard)
+        await update.message.reply_text(text, reply_markup=kb)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        await update.message.reply_text("⛔ Доступ запрещён.")
+        await update.message.reply_text("⛔ Доступ запрещён")
         return
 
     if update.message.text == "📥 Лиды":
@@ -146,7 +148,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_leads(update, context, int(offset), int(limit))
 
 
-# === ЗАПУСК ===
+# =====================
+# RUN
+# =====================
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
