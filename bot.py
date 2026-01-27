@@ -39,7 +39,6 @@ try:
 except Exception:
     MODELS = {}
 
-
 # =========================
 # ENV
 # =========================
@@ -117,15 +116,14 @@ def db_due_reminders(limit: int = 30):
 # =========================
 # UI options
 # =========================
+# Переписанные статусы: минимальный набор для покупателей.
+# waiting    – заказ ожидает подтверждения или завершения;
+# contact_needed – требуется связаться с покупателем;
+# completed  – заказ завершён и оплачен.
 STATUS_OPTIONS = [
-    ("new", "🆕 Новый"),
-    ("contact", "📞 Связаться"),
-    ("work", "⚙️ В работе"),
-    ("wait_pay", "💳 Ждёт оплату"),
-    ("paid", "✅ Оплачен"),
-    ("shipped", "📦 Отгружено"),
-    ("lost", "👻 Пропал"),
-    ("closed", "🗑 Закрыт"),
+    ("waiting", "⌛ В ожидании заказа"),
+    ("contact_needed", "📞 Требуется связаться"),
+    ("completed", "✅ Завершён / оплачен"),
 ]
 
 SEGMENT_OPTIONS = [
@@ -148,12 +146,12 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     Возвращает клавиатуру главного меню.
 
     По умолчанию содержит три основные кнопки:
-    • 📥 Лиды — переход к списку лидов
+    • 🛒 Покупатели — переход к списку покупателей
     • 🔔 Напоминания — просмотр просроченных напоминаний
     • 📦 Каталог — просмотр каталога моделей
     """
     return ReplyKeyboardMarkup(
-        [["📥 Лиды", "🔔 Напоминания", "📦 Каталог"]],
+        [["🛒 Покупатели", "🔔 Напоминания", "📦 Каталог"]],
         resize_keyboard=True,
     )
 
@@ -166,7 +164,7 @@ def fmt_dt(v) -> str:
 
 def lead_card_text(lead: dict) -> str:
     return (
-        f"👤 Лид\n\n"
+        f"👤 Покупатель\n\n"
         f"ID: {lead['id']}\n"
         f"📞 Телефон: {lead.get('phone','—')}\n"
         f"👤 ФИО: {lead.get('full_name') or '—'}\n"
@@ -175,7 +173,7 @@ def lead_card_text(lead: dict) -> str:
         f"Источник: {lead.get('source','—')}\n"
         f"Модель: {lead.get('model_code') or '—'}\n"
         f"Сегмент: {lead.get('segment','unknown')}\n"
-        f"Статус: {lead.get('status','new')}\n\n"
+        f"Статус: {lead.get('status','waiting')}\n\n"
         f"Создан: {fmt_dt(lead.get('created_at'))}\n"
         f"Последний контакт: {fmt_dt(lead.get('last_contact_at'))}\n"
         f"Напоминание: {fmt_dt(lead.get('remind_at'))}\n\n"
@@ -206,7 +204,7 @@ def leads_list_kb(rows, offset: int, limit: int, total: int) -> InlineKeyboardMa
         lead_id = str(r["id"])
         phone = r.get("phone", "-")
         model = r.get("model_code") or "-"
-        status = r.get("status", "new")
+        status = r.get("status", "waiting")
         buttons.append([InlineKeyboardButton(f"{phone} • {model} • {status}", callback_data=f"lead:{lead_id}")])
 
     nav = []
@@ -293,14 +291,9 @@ def step_segment_kb(lead_id: str):
 
 def step_status_kb(lead_id: str):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆕 Новый", callback_data=f"form_set_status:{lead_id}:new")],
-        [InlineKeyboardButton("📞 Связаться", callback_data=f"form_set_status:{lead_id}:contact")],
-        [InlineKeyboardButton("⚙️ В работе", callback_data=f"form_set_status:{lead_id}:work")],
-        [InlineKeyboardButton("💳 Ждёт оплату", callback_data=f"form_set_status:{lead_id}:wait_pay")],
-        [InlineKeyboardButton("✅ Оплачен", callback_data=f"form_set_status:{lead_id}:paid")],
-        [InlineKeyboardButton("📦 Отгружено", callback_data=f"form_set_status:{lead_id}:shipped")],
-        [InlineKeyboardButton("👻 Пропал", callback_data=f"form_set_status:{lead_id}:lost")],
-        [InlineKeyboardButton("🗑 Закрыт", callback_data=f"form_set_status:{lead_id}:closed")],
+        [InlineKeyboardButton("⌛ В ожидании заказа", callback_data=f"form_set_status:{lead_id}:waiting")],
+        [InlineKeyboardButton("📞 Требуется связаться", callback_data=f"form_set_status:{lead_id}:contact_needed")],
+        [InlineKeyboardButton("✅ Завершён / оплачен", callback_data=f"form_set_status:{lead_id}:completed")],
         [InlineKeyboardButton("⬅️ Назад в карточку", callback_data=f"lead:{lead_id}")],
     ])
 
@@ -524,7 +517,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_leads(update: Update, context: ContextTypes.DEFAULT_TYPE, offset: int = 0, limit: int = 20):
     total = db_count_leads()
     rows = db_list_leads(limit=limit, offset=offset)
-    text = f"📥 Лиды {offset + 1}–{min(offset + limit, total)} из {total}\nВыбери лид:"
+    text = f"🛒 Покупатели {offset + 1}–{min(offset + limit, total)} из {total}\nВыбери покупателя:"
     kb = leads_list_kb(rows, offset, limit, total)
 
     if update.callback_query:
@@ -537,7 +530,7 @@ async def show_leads(update: Update, context: ContextTypes.DEFAULT_TYPE, offset:
 async def show_lead_card(update: Update, context: ContextTypes.DEFAULT_TYPE, lead_id: str):
     lead = db_get_lead(lead_id)
     if not lead:
-        msg = "Лид не найден."
+        msg = "Покупатель не найден."
         if update.callback_query:
             await update.callback_query.answer()
             await update.callback_query.edit_message_text(msg)
@@ -591,7 +584,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # обычные кнопки
-    if txt == "📥 Лиды":
+    if txt == "🛒 Покупатели":
         await show_leads(update, context, 0, 20)
         return
 
@@ -611,7 +604,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_catalog(update, context)
         return
 
-    await update.message.reply_text("Нажми «📥 Лиды» или /start")
+    await update.message.reply_text("Нажми «🛒 Покупатели» или /start")
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
