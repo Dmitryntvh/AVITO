@@ -7,18 +7,12 @@ from psycopg.rows import dict_row
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 
-# =========================
-# Connection
-# =========================
 def get_conn():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-# =========================
-# Init / migrations (safe)
-# =========================
 def init_db():
     """
     Создаёт таблицы и безопасно добавляет новые колонки.
@@ -67,7 +61,7 @@ def init_db():
 
     migrate_leads_sql = [
         # профиль лида
-        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS name TEXT;",  # оставлено для совместимости со старыми вставками
+        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS name TEXT;",  # для совместимости со старым кодом
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT '';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS interest TEXT NOT NULL DEFAULT '';",
@@ -98,13 +92,6 @@ def init_db():
 # Leads (CRM)
 # =========================
 def insert_lead(phone, source, model_code=None, name=None):
-    """
-    Создаёт лида. Возвращает UUID строкой.
-    phone: +7...
-    source: 'qr'/'avito'/'ozon'/etc
-    model_code: например 'polar-6'
-    name: опционально (старое поле, оставлено)
-    """
     lead_id = uuid.uuid4()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -159,9 +146,6 @@ def get_lead(lead_id):
 
 
 def update_lead_profile(lead_id, full_name=None, city=None, interest=None):
-    """
-    Обновляет поля профиля лида. Передавай только то, что меняешь.
-    """
     sets = []
     params = []
 
@@ -223,9 +207,6 @@ def set_lead_segment(lead_id, segment):
 
 
 def append_lead_note(lead_id, note_text):
-    """
-    Добавляет заметку в начало поля note (последние сверху).
-    """
     note_text = (note_text or "").strip()
     if not note_text:
         return
@@ -248,11 +229,6 @@ def append_lead_note(lead_id, note_text):
 
 
 def set_lead_remind_at(lead_id, remind_at_iso_or_none):
-    """
-    remind_at_iso_or_none:
-      - None -> очистить напоминание
-      - ISO строка -> установить (например dt.isoformat())
-    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             if remind_at_iso_or_none:
@@ -269,9 +245,6 @@ def set_lead_remind_at(lead_id, remind_at_iso_or_none):
 
 
 def due_reminders(limit=20):
-    """
-    Лиды, по которым remind_at <= now.
-    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -283,30 +256,6 @@ def due_reminders(limit=20):
                 LIMIT %s
                 """,
                 (limit,),
-            )
-            return cur.fetchall()
-
-
-def find_leads_by_phone(query, limit=20):
-    """
-    Поиск по телефону: можно передать часть номера.
-    """
-    q = (query or "").strip()
-    if not q:
-        return []
-
-    like = f"%{q}%"
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, phone, source, model_code, created_at, status, segment
-                FROM leads
-                WHERE phone ILIKE %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (like, limit),
             )
             return cur.fetchall()
 
@@ -388,10 +337,6 @@ def upsert_model(code, name, short, price_drawings, drawings_url):
 
 
 def replace_kits(model_code, kits):
-    """
-    kits: список dict {"material": str, "price": int}
-    Полностью перезаписывает комплекты модели.
-    """
     kits = kits or []
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -408,9 +353,6 @@ def replace_kits(model_code, kits):
 
 
 def replace_images(model_code, urls):
-    """
-    urls: список URL (строки). Полностью перезаписывает фото.
-    """
     urls = urls or []
     with get_conn() as conn:
         with conn.cursor() as cur:
