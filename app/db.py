@@ -18,9 +18,7 @@ def init_db():
     Создаёт таблицы и безопасно добавляет новые колонки.
     Можно вызывать на старте сколько угодно раз.
     """
-
     create_sql = """
-    -- Лиды (CRM)
     CREATE TABLE IF NOT EXISTS leads (
       id UUID PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -28,45 +26,15 @@ def init_db():
       model_code TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-
-    -- Каталог моделей
-    CREATE TABLE IF NOT EXISTS catalog_models (
-      code TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      short TEXT NOT NULL DEFAULT '',
-      price_drawings INTEGER NOT NULL DEFAULT 0,
-      drawings_url TEXT NOT NULL DEFAULT '',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    -- Комплекты (заготовки) по модели
-    CREATE TABLE IF NOT EXISTS catalog_kits (
-      id UUID PRIMARY KEY,
-      model_code TEXT NOT NULL REFERENCES catalog_models(code) ON DELETE CASCADE,
-      material TEXT NOT NULL,
-      price INTEGER NOT NULL DEFAULT 0
-    );
-
-    -- Фото (URL) для моделей
-    CREATE TABLE IF NOT EXISTS catalog_images (
-      id UUID PRIMARY KEY,
-      model_code TEXT NOT NULL REFERENCES catalog_models(code) ON DELETE CASCADE,
-      url TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_catalog_kits_model ON catalog_kits(model_code);
-    CREATE INDEX IF NOT EXISTS idx_catalog_images_model ON catalog_images(model_code);
     """
 
-    migrate_leads_sql = [
-        # профиль лида
-        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS name TEXT;",  # для совместимости со старым кодом
+    migrate_sql = [
+        # профиль
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT '';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS interest TEXT NOT NULL DEFAULT '';",
 
-        # CRM поля
+        # CRM
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS segment TEXT NOT NULL DEFAULT 'unknown';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new';",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT '';",
@@ -74,39 +42,40 @@ def init_db():
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS remind_at TIMESTAMPTZ;",
 
         # индексы
+        "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);",
         "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);",
         "CREATE INDEX IF NOT EXISTS idx_leads_segment ON leads(segment);",
         "CREATE INDEX IF NOT EXISTS idx_leads_remind_at ON leads(remind_at);",
-        "CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);",
     ]
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(create_sql)
-            for stmt in migrate_leads_sql:
+            for stmt in migrate_sql:
                 cur.execute(stmt)
         conn.commit()
 
 
-# =========================
-# Leads (CRM)
-# =========================
-def insert_lead(phone, source, model_code=None, name=None):
+# -------------------------
+# Leads
+# -------------------------
+def insert_lead(phone: str, source: str, model_code: str | None = None):
     lead_id = uuid.uuid4()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO leads (id, phone, source, model_code, name)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO leads (id, phone, source, model_code)
+                VALUES (%s, %s, %s, %s)
                 """,
-                (lead_id, phone, source, model_code, name),
+                (lead_id, phone, source, model_code),
             )
         conn.commit()
     return str(lead_id)
 
 
-def count_leads():
+def count_leads() -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS cnt FROM leads")
@@ -114,7 +83,7 @@ def count_leads():
             return int(row["cnt"])
 
 
-def list_leads(limit=20, offset=0):
+def list_leads(limit: int = 20, offset: int = 0):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -129,7 +98,7 @@ def list_leads(limit=20, offset=0):
             return cur.fetchall()
 
 
-def get_lead(lead_id):
+def get_lead(lead_id: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -145,7 +114,7 @@ def get_lead(lead_id):
             return cur.fetchone()
 
 
-def update_lead_profile(lead_id, full_name=None, city=None, interest=None):
+def update_lead_profile(lead_id: str, full_name=None, city=None, interest=None):
     sets = []
     params = []
 
@@ -176,14 +145,13 @@ def update_lead_profile(lead_id, full_name=None, city=None, interest=None):
         conn.commit()
 
 
-def set_lead_status(lead_id, status):
+def set_lead_status(lead_id: str, status: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE leads
-                SET status = %s,
-                    last_contact_at = NOW()
+                SET status = %s, last_contact_at = NOW()
                 WHERE id = %s
                 """,
                 (status, lead_id),
@@ -191,14 +159,13 @@ def set_lead_status(lead_id, status):
         conn.commit()
 
 
-def set_lead_segment(lead_id, segment):
+def set_lead_segment(lead_id: str, segment: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE leads
-                SET segment = %s,
-                    last_contact_at = NOW()
+                SET segment = %s, last_contact_at = NOW()
                 WHERE id = %s
                 """,
                 (segment, lead_id),
@@ -206,7 +173,7 @@ def set_lead_segment(lead_id, segment):
         conn.commit()
 
 
-def append_lead_note(lead_id, note_text):
+def append_lead_note(lead_id: str, note_text: str):
     note_text = (note_text or "").strip()
     if not note_text:
         return
@@ -228,7 +195,7 @@ def append_lead_note(lead_id, note_text):
         conn.commit()
 
 
-def set_lead_remind_at(lead_id, remind_at_iso_or_none):
+def set_lead_remind_at(lead_id: str, remind_at_iso_or_none):
     with get_conn() as conn:
         with conn.cursor() as cur:
             if remind_at_iso_or_none:
@@ -244,7 +211,7 @@ def set_lead_remind_at(lead_id, remind_at_iso_or_none):
         conn.commit()
 
 
-def due_reminders(limit=20):
+def due_reminders(limit: int = 30):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -258,123 +225,3 @@ def due_reminders(limit=20):
                 (limit,),
             )
             return cur.fetchall()
-
-
-# =========================
-# Catalog
-# =========================
-def list_models():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT code, name, short, price_drawings, drawings_url, updated_at
-                FROM catalog_models
-                ORDER BY updated_at DESC
-                """
-            )
-            return cur.fetchall()
-
-
-def get_model(code):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT code, name, short, price_drawings, drawings_url
-                FROM catalog_models
-                WHERE code = %s
-                """,
-                (code,),
-            )
-            model = cur.fetchone()
-            if not model:
-                return None
-
-            cur.execute(
-                """
-                SELECT material, price
-                FROM catalog_kits
-                WHERE model_code = %s
-                ORDER BY material
-                """,
-                (code,),
-            )
-            model["kits"] = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT url
-                FROM catalog_images
-                WHERE model_code = %s
-                ORDER BY sort_order ASC, url ASC
-                """,
-                (code,),
-            )
-            model["images"] = [r["url"] for r in cur.fetchall()]
-
-            return model
-
-
-def upsert_model(code, name, short, price_drawings, drawings_url):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO catalog_models (code, name, short, price_drawings, drawings_url, updated_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (code)
-                DO UPDATE SET
-                  name = EXCLUDED.name,
-                  short = EXCLUDED.short,
-                  price_drawings = EXCLUDED.price_drawings,
-                  drawings_url = EXCLUDED.drawings_url,
-                  updated_at = NOW()
-                """,
-                (code, name, short or "", int(price_drawings or 0), drawings_url or ""),
-            )
-        conn.commit()
-
-
-def replace_kits(model_code, kits):
-    kits = kits or []
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM catalog_kits WHERE model_code = %s", (model_code,))
-            for k in kits:
-                cur.execute(
-                    """
-                    INSERT INTO catalog_kits (id, model_code, material, price)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (uuid.uuid4(), model_code, (k.get("material") or "").strip(), int(k.get("price") or 0)),
-                )
-        conn.commit()
-
-
-def replace_images(model_code, urls):
-    urls = urls or []
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM catalog_images WHERE model_code = %s", (model_code,))
-            order_num = 0
-            for url in urls:
-                u = (url or "").strip()
-                if not u:
-                    continue
-                order_num += 1
-                cur.execute(
-                    """
-                    INSERT INTO catalog_images (id, model_code, url, sort_order)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (uuid.uuid4(), model_code, u, order_num),
-                )
-        conn.commit()
-
-
-def delete_model(code):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM catalog_models WHERE code = %s", (code,))
-        conn.commit()
