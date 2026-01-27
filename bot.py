@@ -17,35 +17,23 @@ from telegram.ext import (
     filters,
 )
 
-# ------------------------
-# Logging
-# ------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 log = logging.getLogger("bot")
 
-# ------------------------
-# ENV
-# ------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "").strip()
 
 if not TELEGRAM_BOT_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set (Railway -> bot service -> Variables)")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
-
-def parse_admin_ids(raw: str) -> set[int]:
-    ids: set[int] = set()
-    for p in (raw or "").split(","):
-        p = p.strip()
-        if p.isdigit():
-            ids.add(int(p))
-    return ids
-
-
-ADMIN_IDS = parse_admin_ids(ADMIN_TG_IDS_RAW)
+ADMIN_IDS = set()
+for p in (ADMIN_TG_IDS_RAW or "").split(","):
+    p = p.strip()
+    if p.isdigit():
+        ADMIN_IDS.add(int(p))
 
 
 def is_admin(update: Update) -> bool:
@@ -102,7 +90,7 @@ def db_update_profile(lead_id: str, full_name=None, city=None, interest=None):
 
 
 # ------------------------
-# UI helpers
+# UI
 # ------------------------
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -131,11 +119,49 @@ SEGMENT_OPTIONS = [
     ("factory", "🏭 Производственник"),
 ]
 
+INTEREST_OPTIONS = [
+    ("drawings", "📐 Чертежи"),
+    ("blanks", "🧱 Заготовка"),
+    ("tub", "🛁 Готовый чан"),
+    ("consult", "🧠 Консультация"),
+    ("other", "🧩 Другое"),
+]
+
+# (user_id, lead_id) -> set(codes)
+INTEREST_TMP = {}
+
+# анкета: user_id -> {"lead_id": str, "step": str}
+FORM_STATE = {}
+
 
 def fmt_dt(v) -> str:
     if isinstance(v, datetime):
         return v.strftime("%d.%m.%Y %H:%M")
     return str(v) if v else "—"
+
+
+def interest_codes_to_text(selected_set) -> str:
+    mapping = {
+        "drawings": "чертежи",
+        "blanks": "заготовка",
+        "tub": "готовый чан",
+        "consult": "консультация",
+        "other": "другое",
+    }
+    order = [code for code, _ in INTEREST_OPTIONS]
+    return ", ".join(mapping[c] for c in order if c in selected_set)
+
+
+def form_set(user_id: int, lead_id: str, step: str):
+    FORM_STATE[user_id] = {"lead_id": lead_id, "step": step}
+
+
+def form_get(user_id: int):
+    return FORM_STATE.get(user_id)
+
+
+def form_clear(user_id: int):
+    FORM_STATE.pop(user_id, None)
 
 
 def leads_list_kb(rows, offset: int, limit: int, total: int) -> InlineKeyboardMarkup:
@@ -180,9 +206,7 @@ def lead_card_text(lead: dict) -> str:
 def lead_card_kb(lead_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton("✍️ Данные (ФИО/город/интерес)", callback_data=f"lead_profile:{lead_id}"),
-            ],
+            [InlineKeyboardButton("🧾 Анкета (по шагам)", callback_data=f"lead_form:{lead_id}")],
             [
                 InlineKeyboardButton("🔁 Статус", callback_data=f"lead_status:{lead_id}"),
                 InlineKeyboardButton("🏷 Сегмент", callback_data=f"lead_segment:{lead_id}"),
@@ -233,36 +257,153 @@ def remind_kb(lead_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def profile_kb(lead_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("👤 Ввести ФИО", callback_data=f"set_profile_mode:{lead_id}:full_name")],
-            [InlineKeyboardButton("🏙 Ввести город", callback_data=f"set_profile_mode:{lead_id}:city")],
-            [InlineKeyboardButton("🎯 Ввести интерес", callback_data=f"set_profile_mode:{lead_id}:interest")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data=f"lead:{lead_id}")],
-        ]
-    )
+def step_segment_kb(lead_id: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Частник", callback_data=f"form_set_segment:{lead_id}:private")],
+        [InlineKeyboardButton("🧑‍🏭 Сварщик", callback_data=f"form_set_segment:{lead_id}:welder")],
+        [InlineKeyboardButton("🏭 Производственник", callback_data=f"form_set_segment:{lead_id}:factory")],
+        [InlineKeyboardButton("⬅️ Назад в карточку", callback_data=f"lead:{lead_id}")],
+    ])
+
+
+def step_status_kb(lead_id: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🆕 Новый", callback_data=f"form_set_status:{lead_id}:new")],
+        [InlineKeyboardButton("📞 Связаться", callback_data=f"form_set_status:{lead_id}:contact")],
+        [InlineKeyboardButton("⚙️ В работе", callback_data=f"form_set_status:{lead_id}:work")],
+        [InlineKeyboardButton("💳 Ждёт оплату", callback_data=f"form_set_status:{lead_id}:wait_pay")],
+        [InlineKeyboardButton("✅ Оплачен", callback_data=f"form_set_status:{lead_id}:paid")],
+        [InlineKeyboardButton("📦 Отгружено", callback_data=f"form_set_status:{lead_id}:shipped")],
+        [InlineKeyboardButton("👻 Пропал", callback_data=f"form_set_status:{lead_id}:lost")],
+        [InlineKeyboardButton("🗑 Закрыт", callback_data=f"form_set_status:{lead_id}:closed")],
+        [InlineKeyboardButton("⬅️ Назад в карточку", callback_data=f"lead:{lead_id}")],
+    ])
+
+
+def interest_kb(user_id: int, lead_id: str):
+    selected = INTEREST_TMP.get((user_id, lead_id), set())
+    rows = []
+    for code, label in INTEREST_OPTIONS:
+        mark = "✅ " if code in selected else "☐ "
+        rows.append([InlineKeyboardButton(mark + label, callback_data=f"form_interest_toggle:{lead_id}:{code}")])
+
+    rows.append([
+        InlineKeyboardButton("✅ Готово", callback_data=f"form_interest_done:{lead_id}"),
+        InlineKeyboardButton("🧹 Очистить", callback_data=f"form_interest_clear:{lead_id}"),
+    ])
+    rows.append([InlineKeyboardButton("⬅️ Назад в карточку", callback_data=f"lead:{lead_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def form_nav_kb(lead_id: str, back_step, allow_skip: bool = True):
+    row = []
+    if back_step:
+        row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"form_back:{lead_id}:{back_step}"))
+    if allow_skip:
+        row.append(InlineKeyboardButton("⏭ Пропустить", callback_data=f"form_skip:{lead_id}"))
+
+    return InlineKeyboardMarkup([
+        row if row else [InlineKeyboardButton("⬅️ В карточку", callback_data=f"lead:{lead_id}")],
+        [InlineKeyboardButton("✖️ Отмена", callback_data=f"lead:{lead_id}")],
+    ])
 
 
 # ------------------------
-# Pending input state
+# Form step renderer
 # ------------------------
-# user_id -> {"mode": "note"/"remind"/"profile", "lead_id": "...", "field": "..."}
-PENDING = {}
+async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lead_id: str, step: str):
+    user_id = update.effective_user.id
+    form_set(user_id, lead_id, step)
+
+    if step == "full_name":
+        text = "1/6 👤 Введи ФИО одним сообщением.\nПример: Иванов Иван Иванович"
+        kb = form_nav_kb(lead_id, back_step=None, allow_skip=True)
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
+        else:
+            await update.message.reply_text(text, reply_markup=kb)
+        return
+
+    if step == "city":
+        text = "2/6 🏙 Введи город.\nПример: Нижний Тагил"
+        kb = form_nav_kb(lead_id, back_step="full_name", allow_skip=True)
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
+        else:
+            await update.message.reply_text(text, reply_markup=kb)
+        return
+
+    if step == "segment":
+        text = "3/6 🏷 Выбери сегмент:"
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=step_segment_kb(lead_id))
+        else:
+            await update.message.reply_text(text, reply_markup=step_segment_kb(lead_id))
+        return
+
+    if step == "interest":
+        text = "4/6 🎯 Выбери интерес (можно несколько):"
+        # при входе в шаг — берём текущее из БД и предзаполняем галочки
+        lead = db_get_lead(lead_id)
+        current = (lead.get("interest") or "").lower()
+        selected = set()
+        if "черт" in current:
+            selected.add("drawings")
+        if "заготов" in current:
+            selected.add("blanks")
+        if "готов" in current or "чан" in current:
+            selected.add("tub")
+        if "конс" in current:
+            selected.add("consult")
+        if "дру" in current:
+            selected.add("other")
+        INTEREST_TMP[(user_id, lead_id)] = selected
+
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=interest_kb(user_id, lead_id))
+        else:
+            await update.message.reply_text(text, reply_markup=interest_kb(user_id, lead_id))
+        return
+
+    if step == "status":
+        text = "5/6 🔁 Выбери статус:"
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=step_status_kb(lead_id))
+        else:
+            await update.message.reply_text(text, reply_markup=step_status_kb(lead_id))
+        return
+
+    if step == "note":
+        text = "6/6 📝 Напиши заметку (1 строка) или нажми «Пропустить»."
+        kb = form_nav_kb(lead_id, back_step="status", allow_skip=True)
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(text, reply_markup=kb)
+        else:
+            await update.message.reply_text(text, reply_markup=kb)
+        return
+
+    if step == "done":
+        form_clear(user_id)
+        await show_lead_card(update, context, lead_id)
+        return
 
 
 # ------------------------
-# Bot actions
+# Core views
 # ------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
-
     if not ADMIN_IDS:
-        await update.message.reply_text("⚠️ ADMIN_TG_IDS не задан. Добавь его в Railway Variables (bot service).")
+        await update.message.reply_text("⚠️ ADMIN_TG_IDS не задан в Variables.")
         return
-
     await update.message.reply_text("CRM-бот ✅", reply_markup=main_keyboard())
 
 
@@ -300,6 +441,9 @@ async def show_lead_card(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
         await update.message.reply_text(text, reply_markup=kb)
 
 
+# ------------------------
+# Handlers
+# ------------------------
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
@@ -307,46 +451,32 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     txt = (update.message.text or "").strip()
 
-    # pending input modes
-    if user_id in PENDING:
-        mode = PENDING[user_id].get("mode")
-        lead_id = PENDING[user_id].get("lead_id")
+    # анкета: текстовые шаги
+    st = form_get(user_id)
+    if st:
+        lead_id = st["lead_id"]
+        step = st["step"]
 
-        if mode == "note":
+        if step == "full_name":
+            db_update_profile(lead_id, full_name=txt)
+            await update.message.reply_text("✅ ФИО сохранено")
+            await show_form_step(update, context, lead_id, "city")
+            return
+
+        if step == "city":
+            db_update_profile(lead_id, city=txt)
+            await update.message.reply_text("✅ Город сохранён")
+            await show_form_step(update, context, lead_id, "segment")
+            return
+
+        if step == "note":
             stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
             db_append_note(lead_id, f"[{stamp}] {txt}")
-            del PENDING[user_id]
-            await update.message.reply_text("✅ Заметка сохранена.")
-            await show_lead_card(update, context, lead_id)
+            await update.message.reply_text("✅ Заметка сохранена")
+            await show_form_step(update, context, lead_id, "done")
             return
 
-        if mode == "remind":
-            try:
-                dt = datetime.strptime(txt, "%d.%m.%Y %H:%M")
-                db_set_remind_at(lead_id, dt.isoformat())
-                del PENDING[user_id]
-                await update.message.reply_text("✅ Напоминание установлено.")
-                await show_lead_card(update, context, lead_id)
-                return
-            except ValueError:
-                await update.message.reply_text("❌ Формат неверный. Нужно: ДД.ММ.ГГГГ ЧЧ:ММ (пример: 27.01.2026 18:30)")
-                return
-
-        if mode == "profile":
-            field = PENDING[user_id].get("field")
-            if field == "full_name":
-                db_update_profile(lead_id, full_name=txt)
-            elif field == "city":
-                db_update_profile(lead_id, city=txt)
-            elif field == "interest":
-                db_update_profile(lead_id, interest=txt)
-
-            del PENDING[user_id]
-            await update.message.reply_text("✅ Сохранено.")
-            await show_lead_card(update, context, lead_id)
-            return
-
-    # normal commands by buttons
+    # обычные кнопки
     if txt == "📥 Лиды":
         await show_leads(update, context, offset=0, limit=20)
         return
@@ -356,7 +486,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not rows:
             await update.message.reply_text("🔔 Сейчас нет просроченных напоминаний.")
             return
-
         lines = ["🔔 Пора связаться:\n"]
         for r in rows:
             lines.append(f"• {r.get('phone','—')} | {r.get('model_code') or '—'} | статус={r.get('status','—')} | id={r['id']}")
@@ -374,43 +503,101 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data or ""
     user_id = update.effective_user.id
 
-    # back to list
+    # список
     if data == "leads_back":
         await show_leads(update, context, offset=0, limit=20)
         return
 
-    # list navigation
     if data.startswith("leads:"):
         _, off, lim = data.split(":")
         await show_leads(update, context, offset=int(off), limit=int(lim))
         return
 
-    # open lead card
     if data.startswith("lead:"):
         lead_id = data.split(":", 1)[1]
         await show_lead_card(update, context, lead_id)
         return
 
-    # profile menu
-    if data.startswith("lead_profile:"):
+    # анкета старт
+    if data.startswith("lead_form:"):
         lead_id = data.split(":", 1)[1]
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text("✍️ Какие данные заполнить?", reply_markup=profile_kb(lead_id))
+        await show_form_step(update, context, lead_id, "full_name")
         return
 
-    if data.startswith("set_profile_mode:"):
-        _, lead_id, field = data.split(":", 2)
-        PENDING[user_id] = {"mode": "profile", "lead_id": lead_id, "field": field}
-        await update.callback_query.answer()
-        hint = {
-            "full_name": "👤 Введи ФИО (пример: Иванов Иван Иванович)",
-            "city": "🏙 Введи город (пример: Нижний Тагил)",
-            "interest": "🎯 Введи интерес (пример: чертежи / заготовка / готовый чан)",
-        }.get(field, "Введи значение")
-        await update.callback_query.edit_message_text(hint)
+    # анкета: назад
+    if data.startswith("form_back:"):
+        _, lead_id, back_step = data.split(":", 2)
+        await show_form_step(update, context, lead_id, back_step)
         return
 
-    # status menu
+    # анкета: пропустить
+    if data.startswith("form_skip:"):
+        lead_id = data.split(":", 1)[1]
+        st = form_get(user_id)
+        if not st or st.get("lead_id") != lead_id:
+            await show_lead_card(update, context, lead_id)
+            return
+
+        step = st.get("step")
+        if step == "full_name":
+            await show_form_step(update, context, lead_id, "city")
+            return
+        if step == "city":
+            await show_form_step(update, context, lead_id, "segment")
+            return
+        if step == "note":
+            await show_form_step(update, context, lead_id, "done")
+            return
+
+        await show_form_step(update, context, lead_id, step)
+        return
+
+    # анкета: сегмент
+    if data.startswith("form_set_segment:"):
+        _, lead_id, segment = data.split(":", 2)
+        db_set_segment(lead_id, segment)
+        await update.callback_query.answer("✅ Сегмент сохранён")
+        await show_form_step(update, context, lead_id, "interest")
+        return
+
+    # анкета: интерес (галочки)
+    if data.startswith("form_interest_toggle:"):
+        _, lead_id, code = data.split(":", 2)
+        key = (user_id, lead_id)
+        selected = INTEREST_TMP.get(key, set())
+        if code in selected:
+            selected.remove(code)
+        else:
+            selected.add(code)
+        INTEREST_TMP[key] = selected
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_reply_markup(reply_markup=interest_kb(user_id, lead_id))
+        return
+
+    if data.startswith("form_interest_clear:"):
+        lead_id = data.split(":", 1)[1]
+        INTEREST_TMP[(user_id, lead_id)] = set()
+        await update.callback_query.answer("Очищено")
+        await update.callback_query.edit_message_reply_markup(reply_markup=interest_kb(user_id, lead_id))
+        return
+
+    if data.startswith("form_interest_done:"):
+        lead_id = data.split(":", 1)[1]
+        selected = INTEREST_TMP.get((user_id, lead_id), set())
+        db_update_profile(lead_id, interest=interest_codes_to_text(selected))
+        await update.callback_query.answer("✅ Интерес сохранён")
+        await show_form_step(update, context, lead_id, "status")
+        return
+
+    # анкета: статус
+    if data.startswith("form_set_status:"):
+        _, lead_id, status = data.split(":", 2)
+        db_set_status(lead_id, status)
+        await update.callback_query.answer("✅ Статус сохранён")
+        await show_form_step(update, context, lead_id, "note")
+        return
+
+    # карточка: статус/сегмент/заметка/напоминания (ручной режим)
     if data.startswith("lead_status:"):
         lead_id = data.split(":", 1)[1]
         await update.callback_query.answer()
@@ -424,7 +611,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_lead_card(update, context, lead_id)
         return
 
-    # segment menu
     if data.startswith("lead_segment:"):
         lead_id = data.split(":", 1)[1]
         await update.callback_query.answer()
@@ -438,19 +624,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_lead_card(update, context, lead_id)
         return
 
-    # note
     if data.startswith("lead_note:"):
         lead_id = data.split(":", 1)[1]
-        PENDING[user_id] = {"mode": "note", "lead_id": lead_id}
+        # вручную: просто попросим заметку и допишем
+        form_set(user_id, lead_id, "note")
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(
-            "📝 Напиши заметку одним сообщением.\n"
-            "Пример: «Хочет Polar-6, думает, перезвонить завтра»\n\n"
-            "Отмена: /start"
-        )
+        await update.callback_query.edit_message_text("📝 Напиши заметку одним сообщением (или /start для отмены).")
         return
 
-    # remind menu
     if data.startswith("lead_remind:"):
         lead_id = data.split(":", 1)[1]
         await update.callback_query.answer()
@@ -460,7 +641,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("set_remind:"):
         _, lead_id, mode = data.split(":", 2)
         now = datetime.now()
-
         if mode == "2h":
             dt = now + timedelta(hours=2)
             db_set_remind_at(lead_id, dt.isoformat())
@@ -478,15 +658,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("remind_manual:"):
-        lead_id = data.split(":", 1)[1]
-        PENDING[user_id] = {"mode": "remind", "lead_id": lead_id}
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(
-            "✍️ Введи дату и время в формате:\n"
-            "ДД.ММ.ГГГГ ЧЧ:ММ\n"
-            "Пример: 27.01.2026 18:30\n\n"
-            "Отмена: /start"
-        )
+        # ручной ввод времени напоминания — если нужно, скажи, добавлю (сейчас оставили быстрые варианты)
+        await update.callback_query.answer("Пока используйте быстрые варианты", show_alert=True)
         return
 
     await update.callback_query.answer()
