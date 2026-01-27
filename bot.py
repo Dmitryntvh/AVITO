@@ -23,6 +23,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
+
+# =========================
+# ENV
+# =========================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "").strip()
 
@@ -41,9 +45,14 @@ def is_admin(update: Update) -> bool:
     return bool(u and u.id in ADMIN_IDS)
 
 
-# ------------------------
+# =========================
 # DB wrappers
-# ------------------------
+# =========================
+def db_init():
+    from app.db import init_db
+    init_db()
+
+
 def db_count_leads():
     from app.db import count_leads
     return count_leads()
@@ -69,6 +78,11 @@ def db_set_segment(lead_id: str, segment: str):
     return set_lead_segment(lead_id, segment)
 
 
+def db_update_profile(lead_id: str, full_name=None, city=None, interest=None):
+    from app.db import update_lead_profile
+    return update_lead_profile(lead_id, full_name=full_name, city=city, interest=interest)
+
+
 def db_append_note(lead_id: str, note_text: str):
     from app.db import append_lead_note
     return append_lead_note(lead_id, note_text)
@@ -84,23 +98,9 @@ def db_due_reminders(limit: int = 30):
     return due_reminders(limit=limit)
 
 
-def db_update_profile(lead_id: str, full_name=None, city=None, interest=None):
-    from app.db import update_lead_profile
-    return update_lead_profile(lead_id, full_name=full_name, city=city, interest=interest)
-
-
-# ------------------------
-# UI
-# ------------------------
-def main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [
-            ["📥 Лиды", "🔔 Напоминания"],
-        ],
-        resize_keyboard=True,
-    )
-
-
+# =========================
+# UI options
+# =========================
 STATUS_OPTIONS = [
     ("new", "🆕 Новый"),
     ("contact", "📞 Связаться"),
@@ -113,7 +113,6 @@ STATUS_OPTIONS = [
 ]
 
 SEGMENT_OPTIONS = [
-    ("unknown", "❓ Не задан"),
     ("private", "👤 Частник"),
     ("welder", "🧑‍🏭 Сварщик"),
     ("factory", "🏭 Производственник"),
@@ -127,61 +126,18 @@ INTEREST_OPTIONS = [
     ("other", "🧩 Другое"),
 ]
 
-# (user_id, lead_id) -> set(codes)
-INTEREST_TMP = {}
 
-# анкета: user_id -> {"lead_id": str, "step": str}
-FORM_STATE = {}
+def main_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [["📥 Лиды", "🔔 Напоминания"]],
+        resize_keyboard=True,
+    )
 
 
 def fmt_dt(v) -> str:
     if isinstance(v, datetime):
         return v.strftime("%d.%m.%Y %H:%M")
     return str(v) if v else "—"
-
-
-def interest_codes_to_text(selected_set) -> str:
-    mapping = {
-        "drawings": "чертежи",
-        "blanks": "заготовка",
-        "tub": "готовый чан",
-        "consult": "консультация",
-        "other": "другое",
-    }
-    order = [code for code, _ in INTEREST_OPTIONS]
-    return ", ".join(mapping[c] for c in order if c in selected_set)
-
-
-def form_set(user_id: int, lead_id: str, step: str):
-    FORM_STATE[user_id] = {"lead_id": lead_id, "step": step}
-
-
-def form_get(user_id: int):
-    return FORM_STATE.get(user_id)
-
-
-def form_clear(user_id: int):
-    FORM_STATE.pop(user_id, None)
-
-
-def leads_list_kb(rows, offset: int, limit: int, total: int) -> InlineKeyboardMarkup:
-    buttons = []
-    for r in rows:
-        lead_id = str(r["id"])
-        phone = r.get("phone", "-")
-        model = r.get("model_code") or "-"
-        status = r.get("status", "new")
-        buttons.append([InlineKeyboardButton(f"{phone} • {model} • {status}", callback_data=f"lead:{lead_id}")])
-
-    nav = []
-    if offset > 0:
-        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"leads:{max(offset - limit, 0)}:{limit}"))
-    if offset + limit < total:
-        nav.append(InlineKeyboardButton("▶️ Вперёд", callback_data=f"leads:{offset + limit}:{limit}"))
-    if nav:
-        buttons.append(nav)
-
-    return InlineKeyboardMarkup(buttons)
 
 
 def lead_card_text(lead: dict) -> str:
@@ -215,11 +171,29 @@ def lead_card_kb(lead_id: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📝 Заметка", callback_data=f"lead_note:{lead_id}"),
                 InlineKeyboardButton("⏰ Напомнить", callback_data=f"lead_remind:{lead_id}"),
             ],
-            [
-                InlineKeyboardButton("⬅️ К списку", callback_data="leads_back"),
-            ],
+            [InlineKeyboardButton("⬅️ К списку", callback_data="leads_back")],
         ]
     )
+
+
+def leads_list_kb(rows, offset: int, limit: int, total: int) -> InlineKeyboardMarkup:
+    buttons = []
+    for r in rows:
+        lead_id = str(r["id"])
+        phone = r.get("phone", "-")
+        model = r.get("model_code") or "-"
+        status = r.get("status", "new")
+        buttons.append([InlineKeyboardButton(f"{phone} • {model} • {status}", callback_data=f"lead:{lead_id}")])
+
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"leads:{max(offset - limit, 0)}:{limit}"))
+    if offset + limit < total:
+        nav.append(InlineKeyboardButton("▶️ Вперёд", callback_data=f"leads:{offset + limit}:{limit}"))
+    if nav:
+        buttons.append(nav)
+
+    return InlineKeyboardMarkup(buttons)
 
 
 def status_kb(lead_id: str) -> InlineKeyboardMarkup:
@@ -245,16 +219,43 @@ def remind_kb(lead_id: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("📆 +3 дня", callback_data=f"set_remind:{lead_id}:3d"),
-                InlineKeyboardButton("✍️ Ввести вручную", callback_data=f"remind_manual:{lead_id}"),
+                InlineKeyboardButton("🧹 Убрать", callback_data=f"set_remind:{lead_id}:clear"),
             ],
-            [
-                InlineKeyboardButton("🧹 Убрать напоминание", callback_data=f"set_remind:{lead_id}:clear"),
-            ],
-            [
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"lead:{lead_id}"),
-            ],
+            [InlineKeyboardButton("⬅️ Назад", callback_data=f"lead:{lead_id}")],
         ]
     )
+
+
+# =========================
+# Анкета: состояние и галочки
+# =========================
+FORM_STATE = {}          # user_id -> {"lead_id": str, "step": str}
+INTEREST_TMP = {}        # (user_id, lead_id) -> set(codes)
+
+
+def form_set(user_id: int, lead_id: str, step: str):
+    FORM_STATE[user_id] = {"lead_id": lead_id, "step": step}
+
+
+def form_get(user_id: int):
+    return FORM_STATE.get(user_id)
+
+
+def form_clear(user_id: int):
+    FORM_STATE.pop(user_id, None)
+
+
+def form_nav_kb(lead_id: str, back_step, allow_skip: bool = True):
+    row = []
+    if back_step:
+        row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"form_back:{lead_id}:{back_step}"))
+    if allow_skip:
+        row.append(InlineKeyboardButton("⏭ Пропустить", callback_data=f"form_skip:{lead_id}"))
+
+    return InlineKeyboardMarkup([
+        row if row else [InlineKeyboardButton("⬅️ В карточку", callback_data=f"lead:{lead_id}")],
+        [InlineKeyboardButton("✖️ Отмена", callback_data=f"lead:{lead_id}")],
+    ])
 
 
 def step_segment_kb(lead_id: str):
@@ -280,6 +281,18 @@ def step_status_kb(lead_id: str):
     ])
 
 
+def interest_codes_to_text(selected_set) -> str:
+    mapping = {
+        "drawings": "чертежи",
+        "blanks": "заготовка",
+        "tub": "готовый чан",
+        "consult": "консультация",
+        "other": "другое",
+    }
+    order = [code for code, _ in INTEREST_OPTIONS]
+    return ", ".join(mapping[c] for c in order if c in selected_set)
+
+
 def interest_kb(user_id: int, lead_id: str):
     selected = INTEREST_TMP.get((user_id, lead_id), set())
     rows = []
@@ -295,22 +308,6 @@ def interest_kb(user_id: int, lead_id: str):
     return InlineKeyboardMarkup(rows)
 
 
-def form_nav_kb(lead_id: str, back_step, allow_skip: bool = True):
-    row = []
-    if back_step:
-        row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"form_back:{lead_id}:{back_step}"))
-    if allow_skip:
-        row.append(InlineKeyboardButton("⏭ Пропустить", callback_data=f"form_skip:{lead_id}"))
-
-    return InlineKeyboardMarkup([
-        row if row else [InlineKeyboardButton("⬅️ В карточку", callback_data=f"lead:{lead_id}")],
-        [InlineKeyboardButton("✖️ Отмена", callback_data=f"lead:{lead_id}")],
-    ])
-
-
-# ------------------------
-# Form step renderer
-# ------------------------
 async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lead_id: str, step: str):
     user_id = update.effective_user.id
     form_set(user_id, lead_id, step)
@@ -336,7 +333,7 @@ async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
         return
 
     if step == "segment":
-        text = "3/6 🏷 Выбери сегмент:"
+        text = "3/6 🏷 Выбери тип клиента:"
         if update.callback_query:
             await update.callback_query.answer()
             await update.callback_query.edit_message_text(text, reply_markup=step_segment_kb(lead_id))
@@ -346,7 +343,8 @@ async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
 
     if step == "interest":
         text = "4/6 🎯 Выбери интерес (можно несколько):"
-        # при входе в шаг — берём текущее из БД и предзаполняем галочки
+
+        # предзаполнение из БД (простое)
         lead = db_get_lead(lead_id)
         current = (lead.get("interest") or "").lower()
         selected = set()
@@ -360,6 +358,7 @@ async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
             selected.add("consult")
         if "дру" in current:
             selected.add("other")
+
         INTEREST_TMP[(user_id, lead_id)] = selected
 
         if update.callback_query:
@@ -394,15 +393,15 @@ async def show_form_step(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
         return
 
 
-# ------------------------
-# Core views
-# ------------------------
+# =========================
+# Views
+# =========================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
     if not ADMIN_IDS:
-        await update.message.reply_text("⚠️ ADMIN_TG_IDS не задан в Variables.")
+        await update.message.reply_text("⚠️ ADMIN_TG_IDS не задан. Добавь в Variables.")
         return
     await update.message.reply_text("CRM-бот ✅", reply_markup=main_keyboard())
 
@@ -441,9 +440,9 @@ async def show_lead_card(update: Update, context: ContextTypes.DEFAULT_TYPE, lea
         await update.message.reply_text(text, reply_markup=kb)
 
 
-# ------------------------
+# =========================
 # Handlers
-# ------------------------
+# =========================
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
@@ -478,7 +477,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # обычные кнопки
     if txt == "📥 Лиды":
-        await show_leads(update, context, offset=0, limit=20)
+        await show_leads(update, context, 0, 20)
         return
 
     if txt == "🔔 Напоминания":
@@ -492,7 +491,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
         return
 
-    await update.message.reply_text("Нажми кнопку «📥 Лиды» или /start")
+    await update.message.reply_text("Нажми «📥 Лиды» или /start")
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -505,12 +504,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # список
     if data == "leads_back":
-        await show_leads(update, context, offset=0, limit=20)
+        await show_leads(update, context, 0, 20)
         return
 
     if data.startswith("leads:"):
         _, off, lim = data.split(":")
-        await show_leads(update, context, offset=int(off), limit=int(lim))
+        await show_leads(update, context, int(off), int(lim))
         return
 
     if data.startswith("lead:"):
@@ -552,11 +551,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_form_step(update, context, lead_id, step)
         return
 
-    # анкета: сегмент
+    # анкета: сегмент (тип клиента)
     if data.startswith("form_set_segment:"):
         _, lead_id, segment = data.split(":", 2)
         db_set_segment(lead_id, segment)
-        await update.callback_query.answer("✅ Сегмент сохранён")
+        await update.callback_query.answer("✅ Тип сохранён")
         await show_form_step(update, context, lead_id, "interest")
         return
 
@@ -597,7 +596,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_form_step(update, context, lead_id, "note")
         return
 
-    # карточка: статус/сегмент/заметка/напоминания (ручной режим)
+    # ручные действия из карточки
     if data.startswith("lead_status:"):
         lead_id = data.split(":", 1)[1]
         await update.callback_query.answer()
@@ -626,10 +625,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("lead_note:"):
         lead_id = data.split(":", 1)[1]
-        # вручную: просто попросим заметку и допишем
+        # кратко: используем анкетный шаг note
         form_set(user_id, lead_id, "note")
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("📝 Напиши заметку одним сообщением (или /start для отмены).")
+        await update.callback_query.edit_message_text("📝 Напиши заметку одним сообщением (или /start для выхода).")
         return
 
     if data.startswith("lead_remind:"):
@@ -657,22 +656,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_lead_card(update, context, lead_id)
         return
 
-    if data.startswith("remind_manual:"):
-        # ручной ввод времени напоминания — если нужно, скажи, добавлю (сейчас оставили быстрые варианты)
-        await update.callback_query.answer("Пока используйте быстрые варианты", show_alert=True)
-        return
-
     await update.callback_query.answer()
 
 
 def main():
     log.info("Starting bot...")
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # КЛЮЧЕВО: миграции на старте, чтобы не падало на “тип/сегмент”
+    db_init()
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
