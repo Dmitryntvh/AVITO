@@ -28,7 +28,12 @@ import uuid
 from decimal import Decimal
 from collections import defaultdict
 
-import pandas as pd
+import csv
+try:
+    from openpyxl import load_workbook
+except ImportError:
+    # openpyxl is optional; will be imported at runtime in handle_document if needed
+    load_workbook = None
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -290,36 +295,70 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc:
         return
     file_name = doc.file_name or ""
-    if not file_name.lower().endswith((".xlsx", ".xls", ".xlsm")):
-        await update.message.reply_text("Пожалуйста, отправьте файл Excel (.xlsx).")
+    # We accept Excel (.xlsx, .xlsm) or CSV (.csv) files
+    ext = file_name.lower().split(".")[-1]
+    allowed_exts = {"xlsx", "xlsm", "csv"}
+    if ext not in allowed_exts:
+        await update.message.reply_text("Пожалуйста, отправьте файл Excel (.xlsx, .xlsm) или CSV (.csv).")
         return
     # download file to a temporary location
     tmp_path = f"/tmp/{uuid.uuid4()}_{file_name}"
     file_obj = await doc.get_file()
     await file_obj.download_to_drive(tmp_path)
-    # parse excel
-    try:
-        df = pd.read_excel(tmp_path)
-    except Exception as e:
-        log.exception("Failed to read Excel file: %s", e)
-        await update.message.reply_text("Не удалось прочитать файл: %s" % e)
-        return
-    # convert rows to list of dicts with required columns
     items = []
-    for _, row in df.iterrows():
-        code = str(row.get("code", "")).strip()
-        name = str(row.get("name", "")).strip()
-        if not code or not name:
-            continue
-        price = row.get("price", 0)
-        try:
-            # convert to float or decimal
-            price_val = float(price) if price == price else 0
-        except Exception:
-            price_val = 0
-        unit = str(row.get("unit", "")).strip()
-        desc = str(row.get("description", "")).strip()
-        items.append({"code": code, "name": name, "price": price_val, "unit": unit, "description": desc})
+    try:
+        if ext == "csv":
+            # Parse CSV file using built-in csv module
+            with open(tmp_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    code = str(row.get("code", "")).strip()
+                    name = str(row.get("name", "")).strip()
+                    if not code or not name:
+                        continue
+                    price = row.get("price", 0)
+                    try:
+                        price_val = float(price) if price not in (None, "", "nan") else 0.0
+                    except Exception:
+                        price_val = 0.0
+                    unit = str(row.get("unit", "") or "").strip()
+                    desc = str(row.get("description", "") or "").strip()
+                    items.append({"code": code, "name": name, "price": price_val, "unit": unit, "description": desc})
+        else:
+            # Parse Excel file using openpyxl
+            if load_workbook is None:
+                raise ImportError("openpyxl is required to parse Excel files but is not installed")
+            wb = load_workbook(tmp_path, data_only=True)
+            sheet = wb.active
+            # read header row (first row)
+            rows_iter = sheet.iter_rows(min_row=1, max_row=1, values_only=True)
+            headers_row = next(rows_iter, None)
+            if not headers_row:
+                raise ValueError("Файл пуст или не содержит заголовков")
+            headers = [str(h).strip().lower() if h is not None else "" for h in headers_row]
+            header_index = {name: idx for idx, name in enumerate(headers) if name}
+            # iterate over the remaining rows
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                # row is a tuple of cell values
+                code = str(row[header_index.get("code", -1)] or "").strip() if "code" in header_index else ""
+                name = str(row[header_index.get("name", -1)] or "").strip() if "name" in header_index else ""
+                if not code or not name:
+                    continue
+                price_val = 0.0
+                if "price" in header_index:
+                    cell_val = row[header_index["price"]]
+                    try:
+                        price_val = float(cell_val) if cell_val not in (None, "", "nan") else 0.0
+                    except Exception:
+                        price_val = 0.0
+                unit = str(row[header_index.get("unit", -1)] or "").strip() if "unit" in header_index else ""
+                desc = str(row[header_index.get("description", -1)] or "").strip() if "description" in header_index else ""
+                items.append({"code": code, "name": name, "price": price_val, "unit": unit, "description": desc})
+    except Exception as e:
+        log.exception("Failed to read price file: %s", e)
+        await update.message.reply_text("Не удалось прочитать файл: %s" % e)
+        context.user_data["awaiting_price_file"] = False
+        return
     if not items:
         await update.message.reply_text("В файле нет валидных строк.")
     else:
