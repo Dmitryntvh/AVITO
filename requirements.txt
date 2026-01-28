@@ -6,4 +6,4 @@ psycopg[binary]==3.2.13
 itsdangerous>=2.1.2
 python-telegram-bot==20.8
 pip install pandas
-pip install pandas[excel]
+
