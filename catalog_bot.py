@@ -27,6 +27,7 @@ import logging
 import uuid
 from decimal import Decimal
 from collections import defaultdict
+from datetime import datetime
 
 import csv
 try:
@@ -68,6 +69,7 @@ from shop_db import (
     record_payment,
     replace_products,
     list_orders_by_client,
+    upsert_product,
 )
 
 
@@ -124,7 +126,10 @@ def client_menu_kb() -> ReplyKeyboardMarkup:
 def admin_menu_kb() -> ReplyKeyboardMarkup:
     """Main menu for admins."""
     return ReplyKeyboardMarkup(
-        [["📦 Заказы", "📚 Товары"], ["📥 Импорт прайса"]],
+        [
+            ["📦 Заказы", "📚 Товары", "➕ Товар"],
+            ["📥 Импорт прайса", "📊 Отчёт"],
+        ],
         resize_keyboard=True,
     )
 
@@ -262,6 +267,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Handle admin commands via text menu."""
     user = update.effective_user
+    # Если администратор находится в процессе добавления товара, обрабатываем пошагово
+    if context.user_data.get("add_product_step"):
+        await admin_handle_add_product(update, context, text)
+        return
+    # Меню действий администратора
     if text == "📦 Заказы":
         orders = list_orders(limit=50, offset=0)
         kb = admin_orders_kb(orders)
@@ -271,10 +281,19 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         kb = products_kb()
         await update.message.reply_text("Каталог товаров:", reply_markup=kb)
         return
+    if text == "➕ Товар":
+        # начать добавление товара
+        context.user_data["add_product_step"] = "code"
+        context.user_data["add_product_data"] = {}
+        await update.message.reply_text("Введите код товара:")
+        return
+    if text == "📊 Отчёт":
+        await admin_show_report(update, context)
+        return
     if text == "📥 Импорт прайса":
-        # prompt admin to send an Excel file
+        # prompt admin to send an Excel or CSV file
         await update.message.reply_text(
-            "Отправьте Excel‑файл (.xlsx) с колонками code, name, price, unit (необязательно), description (необязательно).",
+            "Отправьте Excel‑файл (.xlsx, .xlsm) или CSV с колонками code, name, price, unit (необязательно), description (необязательно).",
         )
         # set admin state to expect file
         context.user_data["awaiting_price_file"] = True
@@ -579,6 +598,168 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "noop":
         await query.answer()
         return
+
+
+# ---------------------------------------------------------------------------
+# Admin helper functions
+# ---------------------------------------------------------------------------
+
+async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Handle step-by-step product creation for admin.
+
+    This function uses ``context.user_data['add_product_step']`` to track which field
+    is being entered and ``context.user_data['add_product_data']`` to accumulate
+    the partial product data. When all required fields have been collected, the
+    product is inserted or updated via ``upsert_product`` and the admin is
+    returned to the main menu.
+
+    Steps:
+      - ``code``: product code (unique identifier)
+      - ``name``: product name
+      - ``price``: numeric price per unit
+      - ``unit``: unit of measurement (optional)
+      - ``desc``: description (optional)
+    """
+    step = context.user_data.get("add_product_step")
+    data = context.user_data.get("add_product_data", {})
+    # Ensure variables exist
+    if step is None:
+        # Something went wrong; reset state
+        context.user_data.pop("add_product_step", None)
+        context.user_data.pop("add_product_data", None)
+        await update.message.reply_text(
+            "Неверное состояние. Попробуйте снова выбрать \"➕ Товар\".",
+            reply_markup=admin_menu_kb(),
+        )
+        return
+    text_value = text.strip()
+    # Step: code
+    if step == "code":
+        if not text_value:
+            await update.message.reply_text("Код не может быть пустым. Введите код товара:")
+            return
+        data["code"] = text_value
+        context.user_data["add_product_step"] = "name"
+        context.user_data["add_product_data"] = data
+        await update.message.reply_text("Введите название товара:")
+        return
+    # Step: name
+    if step == "name":
+        if not text_value:
+            await update.message.reply_text("Название не может быть пустым. Введите название товара:")
+            return
+        data["name"] = text_value
+        context.user_data["add_product_step"] = "price"
+        context.user_data["add_product_data"] = data
+        await update.message.reply_text("Введите цену за единицу (например, 25.5):")
+        return
+    # Step: price
+    if step == "price":
+        # Replace comma with dot to support local decimal format
+        text_norm = text_value.replace(",", ".")
+        try:
+            price_val = float(text_norm)
+            if price_val < 0:
+                raise ValueError
+        except Exception:
+            await update.message.reply_text("Введите корректную цену, например 10.5")
+            return
+        data["price"] = price_val
+        context.user_data["add_product_step"] = "unit"
+        context.user_data["add_product_data"] = data
+        await update.message.reply_text(
+            "Введите единицу измерения (например, кг, м; оставьте пустым, если не нужно):"
+        )
+        return
+    # Step: unit
+    if step == "unit":
+        # unit can be empty
+        unit_val = text_value
+        data["unit"] = unit_val
+        context.user_data["add_product_step"] = "desc"
+        context.user_data["add_product_data"] = data
+        await update.message.reply_text(
+            "Введите описание (или '-' для пропуска):"
+        )
+        return
+    # Step: desc (final)
+    if step == "desc":
+        desc_val = "" if text_value == "-" else text_value
+        data["description"] = desc_val
+        # Persist product to database
+        try:
+            upsert_product(
+                code=data.get("code"),
+                name=data.get("name"),
+                price=data.get("price"),
+                unit=data.get("unit", ""),
+                description=data.get("description", ""),
+            )
+        except Exception as exc:
+            log.exception("Ошибка при добавлении товара: %s", exc)
+            await update.message.reply_text("Не удалось добавить товар: %s" % exc)
+        else:
+            await update.message.reply_text(
+                f"Товар '{data.get('name')}' добавлен/обновлён.", reply_markup=admin_menu_kb()
+            )
+        # Reset state
+        context.user_data.pop("add_product_step", None)
+        context.user_data.pop("add_product_data", None)
+        return
+
+
+async def admin_show_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate and send a summary report of orders and balances to the admin.
+
+    The report includes total number of orders, number of paid and unpaid orders,
+    the total amount of all orders, the total unpaid amount (debt), and a
+    listing of unpaid orders with client names and amounts. If there are no
+    unpaid orders, it notes that all orders are paid.
+    """
+    # Fetch all recent orders (limit high to include all)
+    orders = list_orders(limit=1000, offset=0)
+    if not orders:
+        await update.message.reply_text("Нет заказов.", reply_markup=admin_menu_kb())
+        return
+    total_count = 0
+    paid_count = 0
+    unpaid_count = 0
+    total_sum = Decimal("0")
+    debt_sum = Decimal("0")
+    unpaid_lines = []
+    for o in orders:
+        total_count += 1
+        amount = Decimal(str(o["total_amount"])) if o.get("total_amount") is not None else Decimal("0")
+        total_sum += amount
+        status = o.get("status", "")
+        if status == "paid":
+            paid_count += 1
+        else:
+            unpaid_count += 1
+            debt_sum += amount
+            # Compose line for unpaid order
+            # Use name or phone from list_orders; fallback to '?' if both empty
+            client_name = o.get("name") or o.get("phone") or "?"
+            order_id = o["id"]
+            unpaid_lines.append(
+                f"• {order_id[:8]}… | {client_name} | {amount:g} | {status}"
+            )
+    # Compose report message
+    lines = []
+    lines.append("📊 Отчёт")
+    lines.append(f"Всего заказов: {total_count}")
+    lines.append(f"Оплачено: {paid_count}")
+    lines.append(f"Не оплачено: {unpaid_count}")
+    lines.append(f"Общая сумма: {total_sum:g}")
+    lines.append(f"Сумма задолженности: {debt_sum:g}")
+    if unpaid_lines:
+        lines.append("\nНеоплаченные заказы:")
+        lines.extend(unpaid_lines)
+    else:
+        lines.append("\nВсе заказы оплачены")
+    msg = "\n".join(lines)
+    await update.message.reply_text(msg, reply_markup=admin_menu_kb())
+    return
 
 
 async def client_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
