@@ -1,25 +1,33 @@
 """
-Telegram bot for selling rolled metal products with delivery.
+Updated Telegram bot for selling rolled metal products with delivery.
 
-This bot allows clients to browse a catalog of metal products, add items to
-their cart, and place an order with payment on delivery. Administrators can
-manage products, view orders, update order statuses, and import price lists
-from Excel files. The bot uses a PostgreSQL database (via psycopg) to store
-clients, products, orders and payments. Pandas is used to parse Excel files.
+This version extends the original ``catalog_bot.py`` implementation to
+support three distinct user roles: administrators, suppliers and buyers
+(clients).  Each role has its own menu and permitted actions.  The code
+is intended as a starting point for the more complete specification
+outlined in the project requirements.
 
-Prerequisites:
-    - Set environment variables TELEGRAM_BOT_TOKEN and ADMIN_TG_IDS (comma‑
-      separated list of Telegram user IDs who have admin rights).
-    - Set DATABASE_URL to a valid PostgreSQL connection string.
+Key additions compared to the original bot:
 
-The bot distinguishes between clients and admins based on Telegram user IDs.
-Clients are asked to share their phone number on first contact; after that
-they can browse the catalog and place orders. Admins have a separate menu
-with options to see orders, manage products and import price lists.
+* Support for suppliers via the environment variable ``SUPPLIER_TG_IDS``.
+  Telegram user IDs listed in this variable (comma‑separated) are
+  considered suppliers.  Suppliers can view and update their own
+  orders but cannot create new products or import price lists.
+* Role detection helpers ``is_admin``, ``is_supplier`` and
+  ``is_client`` to route incoming messages to the appropriate handlers.
+* Separate reply keyboards for clients (buyers), suppliers and
+  administrators.  Suppliers see a simplified menu with access to
+  their orders and reports.
+* Skeleton functions for supplier flows.  These handlers currently
+  reuse the existing order listing logic but can be extended to
+  implement editing order items, confirming shipments and other
+  supplier actions as described in the functional specification.
 
-Note: This is a simplified example intended as a starting point. You may
-extend it to handle more complex scenarios, validations, error handling and
-user flows.
+This file is *not* a drop‑in replacement for the production bot.
+It serves as a guide to help developers transition from a simple
+admin/client model to a more sophisticated RBAC approach.  Additional
+database migrations and business logic will be required to fully
+implement the multi‑role state machine described in the specification.
 """
 
 import os
@@ -31,10 +39,11 @@ from datetime import datetime
 
 import csv
 try:
-    from openpyxl import load_workbook
+    from openpyxl import load_workbook  # type: ignore
 except ImportError:
     # openpyxl is optional; will be imported at runtime in handle_document if needed
-    load_workbook = None
+    load_workbook = None  # type: ignore
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -51,8 +60,8 @@ from telegram.ext import (
     filters,
 )
 
-# Import database functions from shop_db. Ensure that DATABASE_URL is set
-# before running the bot. shop_db.init_db() will create all necessary
+# Import database functions from shop_db.  Ensure that DATABASE_URL is set
+# before running the bot.  shop_db.init_db() will create all necessary
 # tables on startup.
 from shop_db import (
     init_db,
@@ -72,28 +81,36 @@ from shop_db import (
     upsert_product,
 )
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-log = logging.getLogger("catalog_bot")
+log = logging.getLogger("catalog_bot_updated")
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "").strip()
+SUPPLIER_TG_IDS_RAW = os.getenv("SUPPLIER_TG_IDS", "").strip()
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
-ADMIN_IDS = set()
+ADMIN_IDS: set[int] = set()
+SUPPLIER_IDS: set[int] = set()
+
 for part in (ADMIN_TG_IDS_RAW or "").split(","):
     part = part.strip()
     if part.isdigit():
         ADMIN_IDS.add(int(part))
+
+for part in (SUPPLIER_TG_IDS_RAW or "").split(","):
+    part = part.strip()
+    if part.isdigit():
+        SUPPLIER_IDS.add(int(part))
 
 
 def is_admin(user_id: int) -> bool:
@@ -101,14 +118,31 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def is_supplier(user_id: int) -> bool:
+    """Return True if the given Telegram user ID belongs to a supplier."""
+    return user_id in SUPPLIER_IDS
+
+
+def is_client(user_id: int) -> bool:
+    """
+    Return True if the given Telegram user ID is neither admin nor supplier.
+    Clients correspond to buyers in the business specification.
+    """
+    return not (is_admin(user_id) or is_supplier(user_id))
+
+
 # ---------------------------------------------------------------------------
-# Client session state
+# Client and supplier session state
 # ---------------------------------------------------------------------------
+
 # Each client has a state dict storing the current step, cart and temp values.
 # The structure is: { user_id: {"step": str | None, "cart": {code: qty},
 #                             "pending_product": code | None,
 #                             "address": str | None} }
 CLIENT_STATE: dict[int, dict] = defaultdict(lambda: {"step": None, "cart": {}, "pending_product": None, "address": None})
+
+# Suppliers may also require per‑user state for tracking edits or shipments.
+SUPPLIER_STATE: dict[int, dict] = defaultdict(lambda: {"step": None, "pending_order": None})
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +150,17 @@ CLIENT_STATE: dict[int, dict] = defaultdict(lambda: {"step": None, "cart": {}, "
 # ---------------------------------------------------------------------------
 
 def client_menu_kb() -> ReplyKeyboardMarkup:
-    """Main menu for clients."""
+    """Main menu for clients (buyers)."""
     return ReplyKeyboardMarkup(
         [["🛍️ Каталог", "🛒 Корзина", "📦 Мои заказы"]],
+        resize_keyboard=True,
+    )
+
+
+def supplier_menu_kb() -> ReplyKeyboardMarkup:
+    """Main menu for suppliers."""
+    return ReplyKeyboardMarkup(
+        [["📦 Заявки", "📊 Отчёт"]],
         resize_keyboard=True,
     )
 
@@ -174,14 +216,51 @@ def admin_orders_kb(orders) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def supplier_orders_kb(orders) -> InlineKeyboardMarkup:
+    """Returns inline keyboard for supplier orders list."""
+    # For now, reuse the admin layout.  Suppliers may later need to see
+    # only their own orders or have different actions available.
+    return admin_orders_kb(orders)
+
+# ---------------------------------------------------------------------------
+# Order status keyboard
+# ---------------------------------------------------------------------------
+
 def order_status_kb(order_id: str) -> InlineKeyboardMarkup:
-    """Keyboard to update order status."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 Отгрузить", callback_data=f"setstat:{order_id}:shipped")],
-        [InlineKeyboardButton("✅ Доставлено", callback_data=f"setstat:{order_id}:delivered")],
-        [InlineKeyboardButton("💰 Оплачено", callback_data=f"setstat:{order_id}:paid")],
-        [InlineKeyboardButton("🔙 Назад", callback_data=f"order:{order_id}")],
-    ])
+    """Return an inline keyboard for updating order status.
+
+    The order status workflow described in the business requirements involves
+    multiple states beyond the original ``new`` → ``shipped`` → ``delivered`` →
+    ``paid`` model.  To support a richer state machine while maintaining
+    backwards compatibility, this helper constructs a keyboard with all
+    supported statuses.  When a button is pressed, a callback payload of
+    ``setstat:<order_id>:<status_code>`` will be sent to the bot, which the
+    ``on_callback`` handler uses to update the order via ``set_order_status``.
+
+    ``order_id`` should be the unique identifier of the order.  The button
+    labels are localized Russian names for readability.  You can reorder or
+    prune the list as needed, but ensure that the callback data values
+    (status codes) match what your backend expects.
+    """
+    # Define the list of statuses as tuples (internal_code, label)
+    statuses: list[tuple[str, str]] = [
+        ("draft", "Черновик"),
+        ("submitted", "Отправлено"),
+        ("under_review", "На рассмотрении"),
+        ("needs_approval", "Требует согласования"),
+        ("agreed", "Согласовано"),
+        ("confirmed", "Подтверждено"),
+        ("shipped", "Отгружено"),
+        ("received", "Получено"),
+        ("paid", "Оплачено"),
+        ("closed", "Закрыто"),
+        ("cancelled", "Отменено"),
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for status_code, label in statuses:
+        callback_data = f"setstat:{order_id}:{status_code}"
+        rows.append([InlineKeyboardButton(label, callback_data=callback_data)])
+    return InlineKeyboardMarkup(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -189,17 +268,24 @@ def order_status_kb(order_id: str) -> InlineKeyboardMarkup:
 # ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command for both admins and clients."""
+    """Handle /start command for all roles."""
     user = update.effective_user
     if not user:
         return
-    if is_admin(user.id):
+    uid = user.id
+    # Determine role and present appropriate menu
+    if is_admin(uid):
         await update.message.reply_text(
             "Меню администратора", reply_markup=admin_menu_kb()
         )
         return
+    if is_supplier(uid):
+        await update.message.reply_text(
+            "Меню поставщика", reply_markup=supplier_menu_kb()
+        )
+        return
     # client flow
-    client = get_client_by_tg_id(user.id)
+    client = get_client_by_tg_id(uid)
     if client:
         await update.message.reply_text(
             "Главное меню", reply_markup=client_menu_kb()
@@ -217,8 +303,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle contact message from client."""
     user = update.effective_user
+    if not user or not is_client(user.id):
+        return
     contact = update.message.contact
-    if not contact or not user:
+    if not contact:
         return
     phone = contact.phone_number
     name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
@@ -232,17 +320,22 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages for both clients and admins."""
+    """Handle text messages for all roles."""
     user = update.effective_user
     if not user:
         return
+    uid = user.id
     text = (update.message.text or "").strip()
-    # admin
-    if is_admin(user.id):
+    # Admin commands
+    if is_admin(uid):
         await handle_admin_text(update, context, text)
         return
-    # client
-    state = CLIENT_STATE[user.id]
+    # Supplier commands
+    if is_supplier(uid):
+        await handle_supplier_text(update, context, text)
+        return
+    # Client commands
+    state = CLIENT_STATE[uid]
     if state.get("step") == "enter_qty":
         # expecting quantity for product
         await client_receive_quantity(update, context)
@@ -251,27 +344,28 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # expecting address for order
         await client_receive_address(update, context)
         return
-    # menu actions
+    # menu actions for client
     if text == "🛍️ Каталог":
         await client_show_catalog(update, context)
-    elif text == "🛒 Корзина":
+        return
+    if text == "🛒 Корзина":
         await client_show_cart(update, context)
-    elif text == "📦 Мои заказы":
+        return
+    if text == "📦 Мои заказы":
         await client_show_orders(update, context)
-    else:
-        await update.message.reply_text(
-            "Выберите действие через меню.", reply_markup=client_menu_kb()
-        )
+        return
+    await update.message.reply_text(
+        "Выберите действие через меню.", reply_markup=client_menu_kb()
+    )
 
 
 async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Handle admin commands via text menu."""
-    user = update.effective_user
-    # Если администратор находится в процессе добавления товара, обрабатываем пошагово
+    # If admin is in the middle of adding a product
     if context.user_data.get("add_product_step"):
         await admin_handle_add_product(update, context, text)
         return
-    # Меню действий администратора
+    # Admin menu actions
     if text == "📦 Заказы":
         orders = list_orders(limit=50, offset=0)
         kb = admin_orders_kb(orders)
@@ -282,7 +376,6 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text("Каталог товаров:", reply_markup=kb)
         return
     if text == "➕ Товар":
-        # начать добавление товара
         context.user_data["add_product_step"] = "code"
         context.user_data["add_product_data"] = {}
         await update.message.reply_text("Введите код товара:")
@@ -303,10 +396,38 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     )
 
 
+async def handle_supplier_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Handle supplier commands via text menu.
+
+    This is a simplified skeleton that mirrors the admin order view.  In a
+    full implementation, suppliers should only see orders assigned to them
+    and should have capabilities to confirm/edit those orders and mark
+    shipments or deliveries.  Additional state management may be required
+    to support multi‑step interactions such as editing order items.
+    """
+    if text == "📦 Заявки":
+        # Suppliers currently see all orders.  Filter by supplier in a real app.
+        orders = list_orders(limit=50, offset=0)
+        kb = supplier_orders_kb(orders)
+        await update.message.reply_text("Список заявок:", reply_markup=kb)
+        return
+    if text == "📊 Отчёт":
+        # Reuse admin report for now.  In the future, aggregate only supplier orders.
+        await admin_show_report(update, context)
+        return
+    await update.message.reply_text(
+        "Используйте меню для выбора действия.", reply_markup=supplier_menu_kb()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Document handler (price import) – remains admin only
+# ---------------------------------------------------------------------------
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle document messages (used by admin for price import)."""
     user = update.effective_user
-    if not is_admin(user.id):
+    if not user or not is_admin(user.id):
         return
     if not context.user_data.get("awaiting_price_file"):
         return
@@ -324,10 +445,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tmp_path = f"/tmp/{uuid.uuid4()}_{file_name}"
     file_obj = await doc.get_file()
     await file_obj.download_to_drive(tmp_path)
-    items = []
+    items: list[dict] = []
     try:
         if ext == "csv":
-            # Parse CSV file using built-in csv module
+            # Parse CSV file using built‑in csv module
             with open(tmp_path, "r", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -358,7 +479,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             header_index = {name: idx for idx, name in enumerate(headers) if name}
             # iterate over the remaining rows
             for row in sheet.iter_rows(min_row=2, values_only=True):
-                # row is a tuple of cell values
                 code = str(row[header_index.get("code", -1)] or "").strip() if "code" in header_index else ""
                 name = str(row[header_index.get("name", -1)] or "").strip() if "name" in header_index else ""
                 if not code or not name:
@@ -375,7 +495,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 items.append({"code": code, "name": name, "price": price_val, "unit": unit, "description": desc})
     except Exception as e:
         log.exception("Failed to read price file: %s", e)
-        await update.message.reply_text("Не удалось прочитать файл: %s" % e)
+        await update.message.reply_text(f"Не удалось прочитать файл: {e}")
         context.user_data["awaiting_price_file"] = False
         return
     if not items:
@@ -387,7 +507,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# Client flow functions
+# Client flow functions (unchanged)
 # ---------------------------------------------------------------------------
 
 async def client_show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -454,9 +574,9 @@ async def client_receive_quantity(update: Update, context: ContextTypes.DEFAULT_
     """Handle quantity input from client."""
     user_id = update.effective_user.id
     state = CLIENT_STATE[user_id]
-    text = (update.message.text or "").replace(",", ".").strip()
+    text_val = (update.message.text or "").replace(",", ".").strip()
     try:
-        qty = float(text)
+        qty = float(text_val)
         if qty <= 0:
             raise ValueError
     except Exception:
@@ -474,7 +594,10 @@ async def client_receive_quantity(update: Update, context: ContextTypes.DEFAULT_
     state["pending_product"] = None
     # prompt next action
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Продолжить", callback_data="shop:more"), InlineKeyboardButton("🛒 Корзина", callback_data="cart:show")]
+        [
+            InlineKeyboardButton("➕ Продолжить", callback_data="shop:more"),
+            InlineKeyboardButton("🛒 Корзина", callback_data="cart:show"),
+        ]
     ])
     await update.message.reply_text("Товар добавлен в корзину.", reply_markup=kb)
 
@@ -510,6 +633,15 @@ async def client_receive_address(update: Update, context: ContextTypes.DEFAULT_T
         add_order_item(order_id=order_id, product_id=prod["id"], quantity=qty, price=float(price))
     # update total
     update_order_total(order_id)
+    # set initial status for the new order to submitted.  In the legacy
+    # implementation ``create_order`` may set status to ``new``; here we
+    # explicitly update it to ``submitted`` to align with the extended state
+    # machine defined in the functional specification.
+    try:
+        set_order_status(order_id, "submitted")
+    except Exception:
+        # Fallback silently if backend does not support this status yet
+        pass
     # clear cart
     state["cart"] = {}
     state["step"] = None
@@ -519,7 +651,8 @@ async def client_receive_address(update: Update, context: ContextTypes.DEFAULT_T
         f"Заказ создан! Номер заказа: {order_id}.\nНаш менеджер свяжется с вами для подтверждения. Спасибо за заказ!",
         reply_markup=client_menu_kb(),
     )
-    # notify admins
+    # notify suppliers (for now notify all suppliers).  In a complete implementation,
+    # orders would be routed to a specific supplier based on the selected supplier or product.
     order_info_lines = [f"📦 Новый заказ {order_id}"]
     order_info_lines.append(f"Клиент: {client.get('name','')} / {client.get('phone','')}")
     order_info_lines.append(f"Адрес: {address}")
@@ -533,26 +666,29 @@ async def client_receive_address(update: Update, context: ContextTypes.DEFAULT_T
         order_info_lines.append(f"• {name} — {qty:g}{('/' + unit) if unit else ''}")
     order_info_lines.append(f"Итого: {total_amount:g}")
     info = "\n".join(order_info_lines)
-    for admin_id in ADMIN_IDS:
+    # send to all suppliers
+    for sup_id in SUPPLIER_IDS:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=info)
+            await context.bot.send_message(chat_id=sup_id, text=info)
         except Exception as e:
-            log.exception("Failed to notify admin %s: %s", admin_id, e)
+            log.exception("Failed to notify supplier %s: %s", sup_id, e)
 
 
 # ---------------------------------------------------------------------------
-# Callback query handler
+# Callback query handler (client and admin flows).  Supplier callbacks can
+# reuse these handlers for now.  Extend as needed for supplier actions.
 # ---------------------------------------------------------------------------
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callback queries for both clients and admins."""
+    """Handle callback queries for all roles."""
     query = update.callback_query
     if not query:
         return
     user = update.effective_user
     data = query.data or ""
-    # admin callbacks
-    if is_admin(user.id):
+    uid = user.id if user else 0
+    # Admin callbacks
+    if is_admin(uid):
         if data.startswith("order:"):
             _, oid = data.split(":", 1)
             await admin_show_order(update, context, oid)
@@ -566,7 +702,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "noop":
             await query.answer()
             return
-    # client callbacks
+    # Supplier callbacks – for now, suppliers can view orders but do not
+    # change statuses via inline buttons.  Extend as needed.
+    if is_supplier(uid):
+        if data.startswith("order:"):
+            _, oid = data.split(":", 1)
+            await admin_show_order(update, context, oid)
+            return
+        if data == "noop":
+            await query.answer()
+            return
+    # Client callbacks
     if data.startswith("prod:"):
         _, code = data.split(":", 1)
         await client_select_product(update, context, code)
@@ -583,13 +729,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await client_show_catalog(update, context)
             return
         if action == "clear":
-            CLIENT_STATE[user.id]["cart"] = {}
+            CLIENT_STATE[uid]["cart"] = {}
             await query.answer("Корзина очищена")
             await client_show_cart(update, context)
             return
         if action == "place":
             # ask for address
-            CLIENT_STATE[user.id]["step"] = "enter_address"
+            CLIENT_STATE[uid]["step"] = "enter_address"
             await query.answer()
             await query.edit_message_text(
                 "Введите адрес доставки (улица, дом, комментарий):"
@@ -605,7 +751,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 
 async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """Handle step-by-step product creation for admin.
+    """Handle step‑by‑step product creation for admin.
 
     This function uses ``context.user_data['add_product_step']`` to track which field
     is being entered and ``context.user_data['add_product_data']`` to accumulate
@@ -622,7 +768,6 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
     """
     step = context.user_data.get("add_product_step")
     data = context.user_data.get("add_product_data", {})
-    # Ensure variables exist
     if step is None:
         # Something went wrong; reset state
         context.user_data.pop("add_product_step", None)
@@ -633,7 +778,6 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
         )
         return
     text_value = text.strip()
-    # Step: code
     if step == "code":
         if not text_value:
             await update.message.reply_text("Код не может быть пустым. Введите код товара:")
@@ -643,7 +787,6 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
         context.user_data["add_product_data"] = data
         await update.message.reply_text("Введите название товара:")
         return
-    # Step: name
     if step == "name":
         if not text_value:
             await update.message.reply_text("Название не может быть пустым. Введите название товара:")
@@ -653,9 +796,7 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
         context.user_data["add_product_data"] = data
         await update.message.reply_text("Введите цену за единицу (например, 25.5):")
         return
-    # Step: price
     if step == "price":
-        # Replace comma with dot to support local decimal format
         text_norm = text_value.replace(",", ".")
         try:
             price_val = float(text_norm)
@@ -671,22 +812,16 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
             "Введите единицу измерения (например, кг, м; оставьте пустым, если не нужно):"
         )
         return
-    # Step: unit
     if step == "unit":
-        # unit can be empty
         unit_val = text_value
         data["unit"] = unit_val
         context.user_data["add_product_step"] = "desc"
         context.user_data["add_product_data"] = data
-        await update.message.reply_text(
-            "Введите описание (или '-' для пропуска):"
-        )
+        await update.message.reply_text("Введите описание (или '-' для пропуска):")
         return
-    # Step: desc (final)
     if step == "desc":
         desc_val = "" if text_value == "-" else text_value
         data["description"] = desc_val
-        # Persist product to database
         try:
             upsert_product(
                 code=data.get("code"),
@@ -697,7 +832,7 @@ async def admin_handle_add_product(update: Update, context: ContextTypes.DEFAULT
             )
         except Exception as exc:
             log.exception("Ошибка при добавлении товара: %s", exc)
-            await update.message.reply_text("Не удалось добавить товар: %s" % exc)
+            await update.message.reply_text(f"Не удалось добавить товар: {exc}")
         else:
             await update.message.reply_text(
                 f"Товар '{data.get('name')}' добавлен/обновлён.", reply_markup=admin_menu_kb()
@@ -713,10 +848,8 @@ async def admin_show_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     The report includes total number of orders, number of paid and unpaid orders,
     the total amount of all orders, the total unpaid amount (debt), and a
-    listing of unpaid orders with client names and amounts. If there are no
-    unpaid orders, it notes that all orders are paid.
+    listing of unpaid orders with client names and amounts.
     """
-    # Fetch all recent orders (limit high to include all)
     orders = list_orders(limit=1000, offset=0)
     if not orders:
         await update.message.reply_text("Нет заказов.", reply_markup=admin_menu_kb())
@@ -726,10 +859,10 @@ async def admin_show_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     unpaid_count = 0
     total_sum = Decimal("0")
     debt_sum = Decimal("0")
-    unpaid_lines = []
+    unpaid_lines: list[str] = []
     for o in orders:
         total_count += 1
-        amount = Decimal(str(o["total_amount"])) if o.get("total_amount") is not None else Decimal("0")
+        amount = Decimal(str(o.get("total_amount") or 0))
         total_sum += amount
         status = o.get("status", "")
         if status == "paid":
@@ -737,15 +870,12 @@ async def admin_show_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             unpaid_count += 1
             debt_sum += amount
-            # Compose line for unpaid order
-            # Use name or phone from list_orders; fallback to '?' if both empty
             client_name = o.get("name") or o.get("phone") or "?"
             order_id = o["id"]
             unpaid_lines.append(
                 f"• {order_id[:8]}… | {client_name} | {amount:g} | {status}"
             )
-    # Compose report message
-    lines = []
+    lines: list[str] = []
     lines.append("📊 Отчёт")
     lines.append(f"Всего заказов: {total_count}")
     lines.append(f"Оплачено: {paid_count}")
@@ -781,12 +911,12 @@ async def client_select_product(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def admin_show_order(update: Update, context: ContextTypes.DEFAULT_TYPE, order_id: str):
-    """Show order details to admin."""
+    """Show order details to admin or supplier."""
     order = get_order(order_id)
     if not order:
         await update.callback_query.answer("Заказ не найден", show_alert=True)
         return
-    lines = []
+    lines: list[str] = []
     lines.append(f"🧾 Заказ {order['id']}")
     lines.append(f"Дата: {order['created_at'].strftime('%d.%m.%Y %H:%M') if order['created_at'] else ''}")
     client_info = f"{order.get('client_name','')} / {order.get('client_phone','')}"
@@ -802,7 +932,8 @@ async def admin_show_order(update: Update, context: ContextTypes.DEFAULT_TYPE, o
         lines.append(f"• {name} — {qty:g}{('/' + unit) if unit else ''} × {price:g} = {amount:g}")
     lines.append(f"\nИтого: {order['total_amount']:g}")
     msg = "\n".join(lines)
-    kb = order_status_kb(order_id)
+    # Choose appropriate keyboard: admins can update status; suppliers may not.
+    kb = order_status_kb(order_id) if is_admin(update.effective_user.id) else None
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
@@ -811,9 +942,9 @@ async def admin_show_order(update: Update, context: ContextTypes.DEFAULT_TYPE, o
 # Bot startup
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     """Entry point to run the bot."""
-    log.info("Starting catalog bot…")
+    log.info("Starting updated catalog bot…")
     # initialize database (creates tables and performs migrations)
     init_db()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
