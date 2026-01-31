@@ -92,8 +92,8 @@ log = logging.getLogger("catalog_bot_updated")
 # Configuration
 # ---------------------------------------------------------------------------
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ADMIN_TG_IDS_RAW = os.getenv("ADMIN_TG_IDS", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("8067476607:AAEhhNL6YISLFR9cj0ZUYquwkeI3FNFZAl8", "").strip()
+ADMIN_TG_IDS_RAW = os.getenv("5084734764", "").strip()
 SUPPLIER_TG_IDS_RAW = os.getenv("SUPPLIER_TG_IDS", "").strip()
 
 if not TELEGRAM_BOT_TOKEN:
