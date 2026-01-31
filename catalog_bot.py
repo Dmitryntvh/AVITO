@@ -702,11 +702,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "noop":
             await query.answer()
             return
-    # Supplier callbacks – for now, suppliers can view orders but do not
-    # change statuses via inline buttons.  Extend as needed.
+    # Supplier callbacks – suppliers can view orders and update certain statuses.
     if is_supplier(uid):
         if data.startswith("order:"):
             _, oid = data.split(":", 1)
+            await admin_show_order(update, context, oid)
+            return
+        if data.startswith("setstat:"):
+            # allow suppliers to update only specific statuses
+            try:
+                _, oid, status = data.split(":", 2)
+            except ValueError:
+                await query.answer("Неверный формат команды", show_alert=True)
+                return
+            # Define which statuses suppliers are permitted to set
+            allowed_statuses = {"confirmed", "shipped", "received"}
+            if status not in allowed_statuses:
+                await query.answer("Недопустимый статус", show_alert=True)
+                return
+            # Attempt to update the status
+            try:
+                set_order_status(oid, status)
+            except Exception as exc:
+                log.exception("Supplier failed to set status: %s", exc)
+                await query.answer("Ошибка при обновлении статуса", show_alert=True)
+                return
+            await query.answer("Статус обновлён")
             await admin_show_order(update, context, oid)
             return
         if data == "noop":
@@ -932,8 +953,13 @@ async def admin_show_order(update: Update, context: ContextTypes.DEFAULT_TYPE, o
         lines.append(f"• {name} — {qty:g}{('/' + unit) if unit else ''} × {price:g} = {amount:g}")
     lines.append(f"\nИтого: {order['total_amount']:g}")
     msg = "\n".join(lines)
-    # Choose appropriate keyboard: admins can update status; suppliers may not.
-    kb = order_status_kb(order_id) if is_admin(update.effective_user.id) else None
+    # Choose appropriate keyboard: admins and suppliers can update status.
+    # Present the status keyboard for both admin and supplier roles.  In client
+    # context no status keyboard is shown.
+    kb = None
+    uid = update.effective_user.id if update.effective_user else 0
+    if is_admin(uid) or is_supplier(uid):
+        kb = order_status_kb(order_id)
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
