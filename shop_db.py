@@ -432,3 +432,70 @@ def list_orders_by_client(client_id: str) -> List[Dict[str, Any]]:
                 (client_id,),
             )
             return cur.fetchall()
+
+# New functions for clients listing and details
+
+def list_clients_with_balance(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    """
+    Return a list of clients with their unpaid balance. Balance is calculated as the
+    sum of total_amount of all orders that are not marked as 'paid'. The result
+    includes tg_id, phone, name, address and computed balance for each client.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT c.id, c.tg_id, c.phone, c.name, c.address,
+                       COALESCE(SUM(CASE WHEN o.status != 'paid' THEN o.total_amount ELSE 0 END), 0) AS balance
+                FROM clients c
+                LEFT JOIN orders o ON c.id = o.client_id
+                GROUP BY c.id, c.tg_id, c.phone, c.name, c.address
+                ORDER BY c.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            return cur.fetchall()
+
+
+def get_client_with_orders(client_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Return a client with their details and list of orders. The returned dict includes
+    phone, name, address, and a list of orders (each with id, created_at, status,
+    total_amount). It also includes a computed 'balance' field summing unpaid orders.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, tg_id, phone, name, address
+                FROM clients
+                WHERE id = %s
+                """,
+                (client_id,),
+            )
+            client = cur.fetchone()
+            if not client:
+                return None
+            cur.execute(
+                """
+                SELECT id, created_at, status, total_amount, shipped_at, delivered_at, paid_at
+                FROM orders
+                WHERE client_id = %s
+                ORDER BY created_at DESC
+                """,
+                (client_id,),
+            )
+            orders = cur.fetchall()
+            client["orders"] = orders
+            # compute unpaid balance
+            balance = 0
+            for o in orders:
+                if o.get("status") != "paid":
+                    amt = o.get("total_amount") or 0
+                    try:
+                        balance += float(amt)
+                    except Exception:
+                        balance += 0
+            client["balance"] = balance
+            return client
