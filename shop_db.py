@@ -7,11 +7,11 @@ psycopg library for PostgreSQL access. The connection string is read from
 the DATABASE_URL environment variable.
 
 Tables created:
-    clients    — registered clients (Telegram users)
-    products   — catalog items with code, name, price and unit
-    orders     — orders placed by clients
-    order_items — items within each order
-    payments   — payments against orders
+    clients      — registered clients (Telegram users)
+    products     — catalog items with code, name, price and unit
+    orders       — orders placed by clients
+    order_items  — items within each order
+    payments     — payments against orders
 
 Each function opens a new connection using get_conn(). For high throughput
 applications you may consider using a connection pool.
@@ -24,16 +24,13 @@ from typing import List, Dict, Any, Optional
 import psycopg
 from psycopg.rows import dict_row
 
-
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
 
 def get_conn():
     """Return a new psycopg connection using DATABASE_URL."""
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-
 
 def init_db():
     """
@@ -106,7 +103,6 @@ def init_db():
             cur.execute(create_payments_table)
         conn.commit()
 
-
 def insert_client(tg_id: int, phone: str, name: str = "", address: str = "") -> str:
     """
     Create a new client record. If a client with tg_id already exists, return
@@ -130,22 +126,12 @@ def insert_client(tg_id: int, phone: str, name: str = "", address: str = "") -> 
         conn.commit()
     return str(cid)
 
-
 def get_client_by_tg_id(tg_id: int) -> Optional[Dict[str, Any]]:
     """Return client row for a given Telegram user ID."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM clients WHERE tg_id = %s", (tg_id,))
             return cur.fetchone()
-
-
-def get_client_by_phone(phone: str) -> Optional[Dict[str, Any]]:
-    """Return client by phone number."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM clients WHERE phone = %s", (phone,))
-            return cur.fetchone()
-
 
 def list_products(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
     """Return a list of products ordered by name."""
@@ -162,7 +148,6 @@ def list_products(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
             )
             return cur.fetchall()
 
-
 def get_product_by_code(code: str) -> Optional[Dict[str, Any]]:
     """Return product row by its code."""
     with get_conn() as conn:
@@ -176,7 +161,6 @@ def get_product_by_code(code: str) -> Optional[Dict[str, Any]]:
                 (code,),
             )
             return cur.fetchone()
-
 
 def upsert_product(code: str, name: str, description: str = "", unit: str = "", price: float = 0.0) -> None:
     """
@@ -206,15 +190,6 @@ def upsert_product(code: str, name: str, description: str = "", unit: str = "", 
                 )
         conn.commit()
 
-
-def delete_product(code: str) -> None:
-    """Delete a product by its code."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM products WHERE code = %s", (code,))
-        conn.commit()
-
-
 def create_order(client_id: str) -> str:
     """Create a new order for the given client and return its ID."""
     oid = uuid.uuid4()
@@ -229,7 +204,6 @@ def create_order(client_id: str) -> str:
             )
         conn.commit()
     return str(oid)
-
 
 def add_order_item(order_id: str, product_id: str, quantity: float, price: float) -> None:
     """Add an item to an order."""
@@ -246,7 +220,6 @@ def add_order_item(order_id: str, product_id: str, quantity: float, price: float
             )
         conn.commit()
 
-
 def update_order_total(order_id: str) -> None:
     """Recalculate and update the total_amount for the given order."""
     with get_conn() as conn:
@@ -262,7 +235,6 @@ def update_order_total(order_id: str) -> None:
                 (total, order_id),
             )
         conn.commit()
-
 
 def list_orders(status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
     """Return orders optionally filtered by status."""
@@ -294,7 +266,6 @@ def list_orders(status: Optional[str] = None, limit: int = 50, offset: int = 0) 
                     (limit, offset),
                 )
             return cur.fetchall()
-
 
 def get_order(order_id: str) -> Optional[Dict[str, Any]]:
     """Return an order and its items."""
@@ -328,7 +299,6 @@ def get_order(order_id: str) -> Optional[Dict[str, Any]]:
             order["items"] = items
             return order
 
-
 def set_order_status(order_id: str, status: str) -> None:
     """Update the status of an order. Also sets timestamps for shipped/delivered/paid statuses."""
     fields = {"status": status}
@@ -356,7 +326,6 @@ def set_order_status(order_id: str, status: str) -> None:
             )
         conn.commit()
 
-
 def record_payment(order_id: str, amount: float, method: str = "post") -> None:
     """
     Insert a payment record and mark the order as paid.
@@ -376,7 +345,6 @@ def record_payment(order_id: str, amount: float, method: str = "post") -> None:
                 (order_id,),
             )
         conn.commit()
-
 
 def replace_products(items: List[Dict[str, Any]]) -> None:
     """
@@ -414,7 +382,6 @@ def replace_products(items: List[Dict[str, Any]]) -> None:
                         (pid, code, name, desc, unit, price),
                     )
         conn.commit()
-
 
 def list_orders_by_client(client_id: str) -> List[Dict[str, Any]]:
     """
@@ -456,7 +423,6 @@ def list_clients_with_balance(limit: int = 100, offset: int = 0) -> List[Dict[st
                 (limit, offset),
             )
             return cur.fetchall()
-
 
 def get_client_with_orders(client_id: str) -> Optional[Dict[str, Any]]:
     """
