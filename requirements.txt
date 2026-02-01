@@ -1,3 +1,7 @@
+
+# List of Python packages required for this project.
+# Pin versions where they are known and stable.
+
 python-telegram-bot==20.8
 psycopg[binary]==3.2.13
 openpyxl
