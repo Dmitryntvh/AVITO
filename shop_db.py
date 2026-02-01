@@ -32,6 +32,21 @@ def get_conn():
         raise RuntimeError("DATABASE_URL is not set")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
+def cleanup_legacy_tables():
+    """
+    Удаляет старые таблицы от предыдущих ботов, если они существуют
+    """
+    legacy_sql = """
+    DROP TABLE IF EXISTS
+        leads,
+        lead_notes,
+        models,
+        models_data,
+        sessions,
+        users,
+        orders_old
+
+
 def init_db():
     """
     Create tables if they do not exist. This function is idempotent and
