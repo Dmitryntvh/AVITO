@@ -155,7 +155,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Запуск бота
 # ===========================
 if __name__ == "__main__":
-    TOKEN = "YOUR_BOT_TOKEN_HERE"  # Вставьте токен вашего бота
+    TOKEN = "8067476607:AAEhhNL6YISLFR9cj0ZUYquwkeI3FNFZAl8"  # Вставьте токен вашего бота
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
