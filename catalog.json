@@ -1,0 +1,26 @@
+{
+  "Сварочное оборудование": [
+    {
+      "name": "Сварочный аппарат 200A",
+      "price": "50 000 ₽",
+      "photo": "https://example.com/photo1.jpg"
+    },
+    {
+      "name": "Сварочные электроды",
+      "price": "2 500 ₽",
+      "photo": "https://example.com/photo2.jpg"
+    }
+  ],
+  "Листы металла": [
+    {
+      "name": "Сталь 8мм",
+      "price": "3 500 ₽/лист",
+      "photo": "https://example.com/photo3.jpg"
+    },
+    {
+      "name": "Алюминий 5мм",
+      "price": "4 200 ₽/лист",
+      "photo": "https://example.com/photo4.jpg"
+    }
+  ]
+}
