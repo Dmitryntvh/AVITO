@@ -17,14 +17,38 @@ DB_NAME = "banya_catalog.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
+        # Создаем таблицу категорий если нет
         await db.execute("""CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT)""")
+        
+        # Создаем таблицу продуктов если нет (базовая структура)
         await db.execute("""CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT NOT NULL,
-            description TEXT, specs TEXT, price_project TEXT, price_welding TEXT,
-            price_finish TEXT, price_ladder TEXT, avito_link TEXT, ozon_link TEXT,
-            phone TEXT, photo_id TEXT, FOREIGN KEY (category_id) REFERENCES categories(id))""")
+            description TEXT, photo_id TEXT, FOREIGN KEY (category_id) REFERENCES categories(id))""")
+        
+        # Проверяем и добавляем недостающие колонки (миграция)
+        columns_to_add = [
+            ("specs", "TEXT"),
+            ("price_project", "TEXT"),
+            ("price_welding", "TEXT"),
+            ("price_finish", "TEXT"),
+            ("price_ladder", "TEXT"),
+            ("avito_link", "TEXT"),
+            ("ozon_link", "TEXT"),
+            ("phone", "TEXT")
+        ]
+        
+        # Получаем список существующих колонок
+        cursor = await db.execute("PRAGMA table_info(products)")
+        existing_columns = [row[1] for row in await cursor.fetchall()]
+        
+        for col_name, col_type in columns_to_add:
+            if col_name not in existing_columns:
+                logging.info(f"Добавление колонки {col_name} в таблицу products")
+                await db.execute(f"ALTER TABLE products ADD COLUMN {col_name} {col_type}")
+        
         await db.commit()
+        logging.info("База данных успешно инициализирована")
 
 def get_main_menu():
     kb = [

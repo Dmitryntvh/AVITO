@@ -1,40 +1,21 @@
 ```
+# Logs
+*.log
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Logs
-*.log
-
-# Database
-*.db
-
-# Environment
-.env
-.env.local
-.env.*
-
-# Dependencies
-.venv/
+.Python
+env/
 venv/
-node_modules/
+.venv/
+.ENV
+.python-version
+.pytest_cache/
+.mypy_cache/
 
-# Build artifacts
-dist/
-build/
-target/
-
-# Editors
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Temp files
-*.tmp
-*.swp
+# Generated files
+bot.log
 ```
