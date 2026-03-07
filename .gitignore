@@ -1,21 +1,5 @@
 ```
 # Logs
 *.log
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
-.python-version
-.pytest_cache/
-.mypy_cache/
-
-# Generated files
 bot.log
 ```
